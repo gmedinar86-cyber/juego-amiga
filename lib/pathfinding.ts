@@ -45,3 +45,34 @@ export function encontrarCamino(
 
   return null;
 }
+
+// BFS acotado por profundidad (no por distancia geométrica): revela solo
+// casillas realmente alcanzables caminando desde `centro` dentro de `radio`
+// pasos, en vez de un cuadrado Chebyshev sin filtrar (que ignoraría ríos y
+// montañas de por medio). Una casilla no transitable SÍ queda visible (se
+// agrega al resultado, para que se vea como "pared") pero no se usa para
+// seguir expandiendo la búsqueda más allá de ella. Sin obstáculos de por
+// medio, da exactamente el mismo resultado que un radio Chebyshev normal.
+export function tilesAlcanzables(centro: Coord, radio: number, tilesPorClave: Map<string, TileBioma>): Coord[] {
+  const claveCentro = claveCoord(centro);
+  const visitado = new Map<string, Coord>([[claveCentro, centro]]);
+  const cola: { coord: Coord; distancia: number }[] = [{ coord: centro, distancia: 0 }];
+
+  while (cola.length > 0) {
+    const { coord, distancia } = cola.shift()!;
+    if (distancia >= radio) continue;
+
+    const tile = tilesPorClave.get(claveCoord(coord));
+    if (!tile || !esTransitable(tile)) continue;
+
+    for (const vecino of vecinos(coord)) {
+      const clave = claveCoord(vecino);
+      if (visitado.has(clave)) continue;
+      if (!tilesPorClave.has(clave)) continue;
+      visitado.set(clave, vecino);
+      cola.push({ coord: vecino, distancia: distancia + 1 });
+    }
+  }
+
+  return Array.from(visitado.values());
+}

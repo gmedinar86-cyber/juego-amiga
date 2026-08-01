@@ -7,12 +7,11 @@ import { supabase } from '../lib/supabase';
 import {
   claveCoord,
   claveProfundidad,
-  coordsEnRadio,
   esquinasRombo,
   isoAPixel,
   type Coord,
 } from '../lib/isoGrid';
-import { encontrarCamino } from '../lib/pathfinding';
+import { encontrarCamino, tilesAlcanzables } from '../lib/pathfinding';
 import { herramientaParaRecurso, objetoParaRecurso, recursosHabilitados as calcularRecursosHabilitados } from '../lib/objetos';
 import type { Bioma, DescubrimientoJugador, InventarioItem, Objeto, ProgresoJugador, TileBioma } from '../lib/tipos';
 
@@ -232,14 +231,12 @@ export default function PantallaJuego({ session }: { session: Session }) {
   function fusionarDescubiertas(
     actuales: Map<string, Coord>,
     centro: Coord,
-    tilesGrid: TileBioma[],
+    tilesPorClaveBioma: Map<string, TileBioma>,
     radio: number = RADIO_VISION_DEFAULT
   ): Map<string, Coord> {
-    const clavesGrid = new Set(tilesGrid.map(claveCoord));
     const resultado = new Map(actuales);
-    for (const c of coordsEnRadio(centro, radio)) {
-      const k = claveCoord(c);
-      if (clavesGrid.has(k)) resultado.set(k, c);
+    for (const c of tilesAlcanzables(centro, radio, tilesPorClaveBioma)) {
+      resultado.set(claveCoord(c), c);
     }
     return resultado;
   }
@@ -303,7 +300,13 @@ export default function PantallaJuego({ session }: { session: Session }) {
       const previas = new Map<string, Coord>(
         (descData?.casillas_descubiertas ?? []).map((c) => [claveCoord(c), c])
       );
-      const reveladas = fusionarDescubiertas(previas, posicionActual, biomaData.tiles.tiles);
+      // tilesPorClave (el useMemo del componente) todavía no existe en este
+      // punto porque `bioma` recién se setea más abajo — armamos el mapa
+      // local solo para esta llamada inicial.
+      const tilesPorClaveInicial = new Map<string, TileBioma>(
+        biomaData.tiles.tiles.map((t: TileBioma) => [claveCoord(t), t])
+      );
+      const reveladas = fusionarDescubiertas(previas, posicionActual, tilesPorClaveInicial);
 
       let descFinal: DescubrimientoJugador;
       if (descData) {
@@ -409,7 +412,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
     const tileDestino = tilesPorClave.get(claveCoord(destinoPaso));
     const radio = tileDestino?.tipo === 'montana' ? RADIO_VISION_MONTANA : RADIO_VISION_DEFAULT;
 
-    const actualizadas = fusionarDescubiertas(descubiertasRef.current, destinoPaso, bioma.tiles.tiles, radio);
+    const actualizadas = fusionarDescubiertas(descubiertasRef.current, destinoPaso, tilesPorClave, radio);
     const huboNuevoDescubrimiento = actualizadas.size !== descubiertasRef.current.size;
     descubiertasRef.current = actualizadas;
     setDescubiertas(actualizadas);

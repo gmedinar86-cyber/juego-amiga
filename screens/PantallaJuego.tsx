@@ -382,6 +382,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
   function animarPaso(destino: Coord, alTerminar: () => void) {
     const origen = posicionVisualRef.current;
     const inicio = Date.now();
+    console.log('[MOV] animarPaso: arranca', { origen, destino, rafIdPrevio: rafIdRef.current });
 
     function frame() {
       const t = Math.min((Date.now() - inicio) / DURACION_PASO_MS, 1);
@@ -397,6 +398,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
         rafIdRef.current = requestAnimationFrame(frame);
       } else {
         rafIdRef.current = null;
+        console.log('[MOV] animarPaso: termina', { destino });
         alTerminar();
       }
     }
@@ -408,7 +410,19 @@ export default function PantallaJuego({ session }: { session: Session }) {
   // Supabase (fire-and-forget) y sigue con el próximo paso de la cola, si
   // quedó alguno tras un posible redirect.
   function completarPaso(destinoPaso: Coord) {
-    if (!bioma) return;
+    console.log('[MOV] completarPaso: inicio', {
+      destinoPaso,
+      bioma: !!bioma,
+      colaAntes: [...colaRef.current],
+      progresoRefActual: progresoRef.current && {
+        posicion_q: progresoRef.current.posicion_q,
+        posicion_r: progresoRef.current.posicion_r,
+      },
+    });
+    if (!bioma) {
+      console.log('[MOV] completarPaso: ABORTA por !bioma');
+      return;
+    }
     const tileDestino = tilesPorClave.get(claveCoord(destinoPaso));
     const radio = tileDestino?.tipo === 'montana' ? RADIO_VISION_MONTANA : RADIO_VISION_DEFAULT;
 
@@ -443,6 +457,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
     }
 
     colaRef.current.shift();
+    console.log('[MOV] completarPaso: fin', { colaDespues: [...colaRef.current] });
     if (colaRef.current.length > 0) {
       ejecutarSiguientePaso();
     } else {
@@ -452,7 +467,11 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
   function ejecutarSiguientePaso() {
     const destino = colaRef.current[0];
-    if (!destino) return;
+    console.log('[MOV] ejecutarSiguientePaso', { destino, cola: [...colaRef.current] });
+    if (!destino) {
+      console.log('[MOV] ejecutarSiguientePaso: ABORTA, cola vacia');
+      return;
+    }
     animarPaso(destino, () => completarPaso(destino));
   }
 
@@ -462,24 +481,39 @@ export default function PantallaJuego({ session }: { session: Session }) {
   // se interrumpe, el nuevo tramo simplemente continúa desde ahí en cuanto
   // ese paso termine.
   function iniciarCaminoHacia(destino: Coord) {
-    if (!progreso || !bioma) return;
+    console.log('[MOV] iniciarCaminoHacia: tap', {
+      destino,
+      progreso: progreso && { posicion_q: progreso.posicion_q, posicion_r: progreso.posicion_r },
+      colaActual: [...colaRef.current],
+      caminando,
+    });
+    if (!progreso || !bioma) {
+      console.log('[MOV] iniciarCaminoHacia: ABORTA por !progreso/!bioma');
+      return;
+    }
 
     const enCaminoActual = colaRef.current.length > 0;
     const origenPlanificacion = enCaminoActual ? colaRef.current[0] : { x: progreso.posicion_q, y: progreso.posicion_r };
 
     const tramoNuevo = encontrarCamino(origenPlanificacion, destino, tilesPorClave);
+    console.log('[MOV] iniciarCaminoHacia: resultado BFS', { origenPlanificacion, destino, enCaminoActual, tramoNuevo });
     if (tramoNuevo === null) {
+      console.log('[MOV] iniciarCaminoHacia: sin camino, muestra flash');
       mostrarSinCamino(destino);
       return;
     }
 
     if (enCaminoActual) {
       colaRef.current = [colaRef.current[0], ...tramoNuevo];
+      console.log('[MOV] iniciarCaminoHacia: redirect aplicado', { colaNueva: [...colaRef.current] });
     } else {
       colaRef.current = tramoNuevo;
       if (colaRef.current.length > 0) {
         setCaminando(true);
+        console.log('[MOV] iniciarCaminoHacia: arranca camino nuevo', { cola: [...colaRef.current] });
         ejecutarSiguientePaso();
+      } else {
+        console.log('[MOV] iniciarCaminoHacia: tramo vacio (ya esta ahi), no hace nada');
       }
     }
   }
@@ -616,11 +650,20 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const gestoPan = useMemo(
     () =>
       Gesture.Pan()
-        .minDistance(10)
+        .minDistance(20)
+        .onTouchesDown((e) => {
+          console.log('[MOV-GESTO] pan onTouchesDown', { t: Date.now(), toques: e.allTouches.length });
+        })
         .onBegin(() => {
+          console.log('[MOV-GESTO] pan onBegin (cruzo minDistance, se activa como pan)', { t: Date.now() });
           offsetInicioGesto.current = cameraOffsetRef.current;
         })
         .onUpdate((e) => {
+          console.log('[MOV-GESTO] pan onUpdate', {
+            t: Date.now(),
+            translationX: e.translationX,
+            translationY: e.translationY,
+          });
           const prog = progresoRef.current;
           if (!prog) return;
           const escala = calcularEscala(zoomRef.current);
@@ -633,6 +676,9 @@ export default function PantallaJuego({ session }: { session: Session }) {
             y: offsetInicioGesto.current.y - e.translationY / escala,
           };
           setCameraOffset(limitarOffset(propuesto, centroJugador, limitesRef.current));
+        })
+        .onFinalize((e, success) => {
+          console.log('[MOV-GESTO] pan onFinalize', { t: Date.now(), success });
         }),
     []
   );

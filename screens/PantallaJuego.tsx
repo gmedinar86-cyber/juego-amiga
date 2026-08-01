@@ -425,9 +425,13 @@ export default function PantallaJuego({ session }: { session: Session }) {
           offsetInicioGesto.current = cameraOffsetRef.current;
         })
         .onUpdate((e) => {
-          if (!progresoRef.current) return;
+          const prog = progresoRef.current;
+          if (!prog) return;
           const escala = calcularEscala(zoomRef.current);
-          const centroJugador = isoAPixel(posicionVisualRef.current, ANCHO_TILE, ALTO_TILE);
+          // El clamp usa la posición de grid ya asentada (no la interpolada
+          // de posicionVisualRef), para que el límite del pan no se mueva
+          // bajo el dedo mientras el personaje camina solo entre casillas.
+          const centroJugador = isoAPixel({ x: prog.posicion_q, y: prog.posicion_r }, ANCHO_TILE, ALTO_TILE);
           const propuesto: Coord = {
             x: offsetInicioGesto.current.x - e.translationX / escala,
             y: offsetInicioGesto.current.y - e.translationY / escala,

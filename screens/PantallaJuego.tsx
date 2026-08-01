@@ -373,10 +373,6 @@ export default function PantallaJuego({ session }: { session: Session }) {
       return;
     }
 
-    // Un solo reseteo de cámara por camino iniciado (no en cada paso), para
-    // no pelearse con un pan manual mientras el personaje camina solo.
-    setCameraOffset({ x: 0, y: 0 });
-
     if (enCaminoActual) {
       colaRef.current = [colaRef.current[0], ...tramoNuevo];
     } else {

@@ -1,8 +1,14 @@
 import type { Coord } from './isoGrid';
 
+export interface CofreTile {
+  objetoId: string;
+  cantidad: number;
+}
+
 export interface TileBioma extends Coord {
   tipo: string;
   recurso: string | null;
+  cofre?: CofreTile | null;
 }
 
 export interface GridBioma {
@@ -39,4 +45,21 @@ export interface DescubrimientoJugador {
   usuario_id: string;
   bioma_id: string;
   casillas_descubiertas: Coord[];
+  cofres_abiertos: Coord[];
+  recursos_recolectados: Coord[];
+}
+
+export interface Objeto {
+  id: string;
+  nombre: string;
+  tipo: string;
+  efecto: { recolecta?: string } | null;
+  bioma_id: string | null;
+}
+
+export interface InventarioItem {
+  id: string;
+  usuario_id: string;
+  objeto_id: string;
+  obtenido_en: string;
 }

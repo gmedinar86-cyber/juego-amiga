@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Svg, { Circle, Polygon } from 'react-native-svg';
+import Svg, { Circle, Image as ImagenSvg, Polygon } from 'react-native-svg';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import {
@@ -13,12 +13,14 @@ import {
   type Coord,
 } from '../lib/isoGrid';
 import { encontrarCamino } from '../lib/pathfinding';
-import type { Bioma, DescubrimientoJugador, ProgresoJugador, TileBioma } from '../lib/tipos';
+import { herramientaParaRecurso, objetoParaRecurso, recursosHabilitados as calcularRecursosHabilitados } from '../lib/objetos';
+import type { Bioma, DescubrimientoJugador, InventarioItem, Objeto, ProgresoJugador, TileBioma } from '../lib/tipos';
 
 const RADIO_VISION_DEFAULT = 1;
 const RADIO_VISION_MONTANA = 3;
 const DURACION_PASO_MS = 200;
 const SIN_CAMINO_FLASH_MS = 350;
+const MENSAJE_ACCION_MS = 1800;
 const ANCHO_TILE = 72;
 const ALTO_TILE = 36;
 const CAMARA_RADIO = 2.5;
@@ -27,6 +29,14 @@ const SEMI_ALTO_BASE = CAMARA_RADIO * ALTO_TILE;
 const ZOOM_MIN_ABSOLUTO = 0.05;
 const ZOOM_MAX = 2.5;
 const MARGEN_ZOOM_ALEJADO = 1.15;
+
+// Placeholder visual: sprite frontal (no isométrico), solo para tener idea
+// de cómo se verá el personaje — no está pensado para encajar perfecto en
+// la perspectiva del mapa.
+const SPRITE_JUGADOR = require('../assets/personajes/maga-fuego-sprite.png');
+const SPRITE_ASPECTO = 628 / 1289; // ancho/alto del PNG original
+const SPRITE_ANCHO = ANCHO_TILE * 0.8;
+const SPRITE_ALTO = SPRITE_ANCHO / SPRITE_ASPECTO;
 
 function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
@@ -92,6 +102,13 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const [descubiertas, setDescubiertas] = useState<Map<string, Coord>>(new Map());
   const [posicionVisual, setPosicionVisual] = useState<Coord>({ x: 0, y: 0 });
   const [casillaSinCamino, setCasillaSinCamino] = useState<string | null>(null);
+  const [caminando, setCaminando] = useState(false);
+  const [catalogoObjetos, setCatalogoObjetos] = useState<Map<string, Objeto>>(new Map());
+  const [inventario, setInventario] = useState<InventarioItem[]>([]);
+  const [cofresAbiertos, setCofresAbiertos] = useState<Map<string, Coord>>(new Map());
+  const [recursosRecolectados, setRecursosRecolectados] = useState<Map<string, Coord>>(new Map());
+  const [inventarioVisible, setInventarioVisible] = useState(false);
+  const [mensajeAccion, setMensajeAccion] = useState<string | null>(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -121,6 +138,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const colaRef = useRef<Coord[]>([]);
   const rafIdRef = useRef<number | null>(null);
   const sinCaminoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mensajeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     cameraOffsetRef.current = cameraOffset;
@@ -140,6 +158,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
     return () => {
       if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
       if (sinCaminoTimeoutRef.current) clearTimeout(sinCaminoTimeoutRef.current);
+      if (mensajeTimeoutRef.current) clearTimeout(mensajeTimeoutRef.current);
     };
   }, []);
 
@@ -233,6 +252,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
       );
       const reveladas = fusionarDescubiertas(previas, posicionActual, biomaData.tiles.tiles);
 
+      let descFinal: DescubrimientoJugador;
       if (descData) {
         setDescubrimientoId(descData.id);
         if (reveladas.size !== previas.size) {
@@ -241,6 +261,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
             .update({ casillas_descubiertas: Array.from(reveladas.values()) })
             .eq('id', descData.id);
         }
+        descFinal = descData;
       } else {
         const { data: nuevoDesc, error: errNuevoDesc } = await supabase
           .from('descubrimiento_jugador')
@@ -253,7 +274,25 @@ export default function PantallaJuego({ session }: { session: Session }) {
           .single();
         if (errNuevoDesc) throw errNuevoDesc;
         setDescubrimientoId(nuevoDesc.id);
+        descFinal = nuevoDesc;
       }
+
+      const cofresIniciales = new Map<string, Coord>(
+        (descFinal.cofres_abiertos ?? []).map((c) => [claveCoord(c), c])
+      );
+      const recursosIniciales = new Map<string, Coord>(
+        (descFinal.recursos_recolectados ?? []).map((c) => [claveCoord(c), c])
+      );
+
+      const { data: objetosData, error: errObjetos } = await supabase.from('objetos').select('*');
+      if (errObjetos) throw errObjetos;
+      const catalogo = new Map<string, Objeto>((objetosData ?? []).map((o) => [o.id, o as Objeto]));
+
+      const { data: inventarioData, error: errInventario } = await supabase
+        .from('inventario_jugador')
+        .select('*')
+        .eq('usuario_id', session.user.id);
+      if (errInventario) throw errInventario;
 
       const posicionInicial: Coord = { x: progresoData.posicion_q, y: progresoData.posicion_r };
       posicionVisualRef.current = posicionInicial;
@@ -263,6 +302,10 @@ export default function PantallaJuego({ session }: { session: Session }) {
       setBioma(biomaData);
       setDescubiertas(reveladas);
       setPosicionVisual(posicionInicial);
+      setCofresAbiertos(cofresIniciales);
+      setRecursosRecolectados(recursosIniciales);
+      setCatalogoObjetos(catalogo);
+      setInventario(inventarioData ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error desconocido al cargar la partida.');
     } finally {
@@ -346,6 +389,8 @@ export default function PantallaJuego({ session }: { session: Session }) {
     colaRef.current.shift();
     if (colaRef.current.length > 0) {
       ejecutarSiguientePaso();
+    } else {
+      setCaminando(false);
     }
   }
 
@@ -377,9 +422,105 @@ export default function PantallaJuego({ session }: { session: Session }) {
     } else {
       colaRef.current = tramoNuevo;
       if (colaRef.current.length > 0) {
+        setCaminando(true);
         ejecutarSiguientePaso();
       }
     }
+  }
+
+  function mostrarMensaje(texto: string) {
+    setMensajeAccion(texto);
+    if (mensajeTimeoutRef.current) clearTimeout(mensajeTimeoutRef.current);
+    mensajeTimeoutRef.current = setTimeout(() => setMensajeAccion(null), MENSAJE_ACCION_MS);
+  }
+
+  // Casilla donde está parado el jugador ahora mismo (posición ya asentada,
+  // no la interpolada) — es donde puede interactuar con cofres/recursos.
+  const tileActual = useMemo(() => {
+    if (!progreso) return null;
+    return tilesPorClave.get(claveCoord({ x: progreso.posicion_q, y: progreso.posicion_r })) ?? null;
+  }, [progreso, tilesPorClave]);
+
+  const habilitados = useMemo(
+    () => calcularRecursosHabilitados(inventario, catalogoObjetos),
+    [inventario, catalogoObjetos]
+  );
+
+  const inventarioAgrupado = useMemo(() => {
+    const conteo = new Map<string, number>();
+    for (const item of inventario) {
+      conteo.set(item.objeto_id, (conteo.get(item.objeto_id) ?? 0) + 1);
+    }
+    return Array.from(conteo.entries())
+      .map(([objetoId, cantidad]) => ({ objeto: catalogoObjetos.get(objetoId), cantidad }))
+      .filter((it): it is { objeto: Objeto; cantidad: number } => it.objeto !== undefined)
+      .sort((a, b) => a.objeto.nombre.localeCompare(b.objeto.nombre));
+  }, [inventario, catalogoObjetos]);
+
+  async function abrirCofre() {
+    if (!progreso || !descubrimientoId || !tileActual?.cofre) return;
+    const clave = claveCoord({ x: progreso.posicion_q, y: progreso.posicion_r });
+    if (cofresAbiertos.has(clave)) return;
+
+    const { objetoId, cantidad } = tileActual.cofre;
+    const filas = Array.from({ length: cantidad }, () => ({ usuario_id: session.user.id, objeto_id: objetoId }));
+
+    const { data: filasInsertadas, error: errInv } = await supabase
+      .from('inventario_jugador')
+      .insert(filas)
+      .select();
+    if (errInv) {
+      setError(errInv.message);
+      return;
+    }
+
+    const nuevosAbiertos = new Map(cofresAbiertos);
+    nuevosAbiertos.set(clave, { x: progreso.posicion_q, y: progreso.posicion_r });
+    setCofresAbiertos(nuevosAbiertos);
+    setInventario((actual) => [...actual, ...(filasInsertadas ?? [])]);
+
+    const objeto = catalogoObjetos.get(objetoId);
+    mostrarMensaje(`+${cantidad} ${objeto?.nombre ?? 'objeto'}`);
+
+    const { error: errDesc } = await supabase
+      .from('descubrimiento_jugador')
+      .update({ cofres_abiertos: Array.from(nuevosAbiertos.values()) })
+      .eq('id', descubrimientoId);
+    if (errDesc) setError(errDesc.message);
+  }
+
+  async function recolectar() {
+    if (!progreso || !descubrimientoId || !tileActual?.recurso) return;
+    const recurso = tileActual.recurso;
+    if (!habilitados.has(recurso)) return;
+
+    const clave = claveCoord({ x: progreso.posicion_q, y: progreso.posicion_r });
+    if (recursosRecolectados.has(clave)) return;
+
+    const objeto = objetoParaRecurso(catalogoObjetos, recurso);
+    if (!objeto) return;
+
+    const { data, error: errInv } = await supabase
+      .from('inventario_jugador')
+      .insert({ usuario_id: session.user.id, objeto_id: objeto.id })
+      .select()
+      .single();
+    if (errInv) {
+      setError(errInv.message);
+      return;
+    }
+
+    const nuevos = new Map(recursosRecolectados);
+    nuevos.set(clave, { x: progreso.posicion_q, y: progreso.posicion_r });
+    setRecursosRecolectados(nuevos);
+    setInventario((actual) => [...actual, data]);
+    mostrarMensaje(`+1 ${objeto.nombre}`);
+
+    const { error: errDesc } = await supabase
+      .from('descubrimiento_jugador')
+      .update({ recursos_recolectados: Array.from(nuevos.values()) })
+      .eq('id', descubrimientoId);
+    if (errDesc) setError(errDesc.message);
   }
 
   const limitesBioma = useMemo<LimitesBioma | null>(() => {
@@ -509,6 +650,13 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
   if (!progreso || !bioma || !geometria) return null;
 
+  const claveActual = tileActual ? claveCoord(tileActual) : null;
+  const mostrarBotonCofre = !caminando && !!tileActual?.cofre && !!claveActual && !cofresAbiertos.has(claveActual);
+  const mostrarBotonRecurso = !caminando && !!tileActual?.recurso && !!claveActual && !recursosRecolectados.has(claveActual);
+  const recursoHabilitado = tileActual?.recurso ? habilitados.has(tileActual.recurso) : false;
+  const herramientaFaltante =
+    tileActual?.recurso && !recursoHabilitado ? herramientaParaRecurso(catalogoObjetos, tileActual.recurso) : undefined;
+
   return (
     <View style={styles.contenedor}>
       <View style={styles.encabezado}>
@@ -518,10 +666,42 @@ export default function PantallaJuego({ session }: { session: Session }) {
             Nivel {progreso.nivel} · Fuerza {progreso.fuerza}
           </Text>
         </View>
-        <TouchableOpacity onPress={() => supabase.auth.signOut()}>
-          <Text style={styles.enlace}>Cerrar sesión</Text>
-        </TouchableOpacity>
+        <View style={styles.accionesEncabezado}>
+          <TouchableOpacity onPress={() => setInventarioVisible(true)}>
+            <Text style={styles.enlace}>Inventario ({inventario.length})</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => supabase.auth.signOut()}>
+            <Text style={styles.enlace}>Cerrar sesión</Text>
+          </TouchableOpacity>
+        </View>
       </View>
+
+      {mensajeAccion && (
+        <View style={styles.mensajeAccion}>
+          <Text style={styles.mensajeAccionTexto}>{mensajeAccion}</Text>
+        </View>
+      )}
+
+      <Modal visible={inventarioVisible} transparent animationType="fade" onRequestClose={() => setInventarioVisible(false)}>
+        <View style={styles.modalFondo}>
+          <View style={styles.modalContenido}>
+            <Text style={styles.modalTitulo}>Inventario</Text>
+            {inventarioAgrupado.length === 0 ? (
+              <Text style={styles.modalVacio}>Todavía no tenés objetos.</Text>
+            ) : (
+              inventarioAgrupado.map(({ objeto, cantidad }) => (
+                <View key={objeto.id} style={styles.modalFila}>
+                  <Text style={styles.modalObjetoNombre}>{objeto.nombre}</Text>
+                  <Text style={styles.modalObjetoCantidad}>x{cantidad}</Text>
+                </View>
+              ))
+            )}
+            <TouchableOpacity style={styles.boton} onPress={() => setInventarioVisible(false)}>
+              <Text style={styles.botonTexto}>Cerrar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <GestureDetector gesture={gestoCompuesto}>
         <View
@@ -554,14 +734,42 @@ export default function PantallaJuego({ session }: { session: Session }) {
             })}
 
             {geometria.puntos
-              .filter(({ tile }) => descubiertas.has(claveCoord(tile)) && tile.recurso)
+              .filter(
+                ({ tile }) =>
+                  descubiertas.has(claveCoord(tile)) && tile.recurso && !recursosRecolectados.has(claveCoord(tile))
+              )
               .map(({ tile, pixel }) => (
                 <Circle key={`recurso-${claveCoord(tile)}`} cx={pixel.x} cy={pixel.y} r={5} fill="#7BC96F" />
               ))}
 
+            {geometria.puntos
+              .filter(
+                ({ tile }) => descubiertas.has(claveCoord(tile)) && tile.cofre && !cofresAbiertos.has(claveCoord(tile))
+              )
+              .map(({ tile, pixel }) => (
+                <Circle
+                  key={`cofre-${claveCoord(tile)}`}
+                  cx={pixel.x}
+                  cy={pixel.y}
+                  r={6}
+                  fill="#D4A017"
+                  stroke="#1D2A38"
+                  strokeWidth={1.5}
+                />
+              ))}
+
             {(() => {
               const pixelJugador = isoAPixel(posicionVisual, ANCHO_TILE, ALTO_TILE);
-              return <Circle cx={pixelJugador.x} cy={pixelJugador.y} r={9} fill="#F4B93F" stroke="#1D2A38" strokeWidth={2} />;
+              return (
+                <ImagenSvg
+                  href={SPRITE_JUGADOR}
+                  x={pixelJugador.x - SPRITE_ANCHO / 2}
+                  y={pixelJugador.y - SPRITE_ALTO / 2}
+                  width={SPRITE_ANCHO}
+                  height={SPRITE_ALTO}
+                  preserveAspectRatio="xMidYMid meet"
+                />
+              );
             })()}
           </Svg>
 
@@ -570,6 +778,32 @@ export default function PantallaJuego({ session }: { session: Session }) {
           </TouchableOpacity>
         </View>
       </GestureDetector>
+
+      {(mostrarBotonCofre || mostrarBotonRecurso) && (
+        <View style={styles.accionesTile}>
+          {mostrarBotonCofre && (
+            <TouchableOpacity style={styles.boton} onPress={abrirCofre}>
+              <Text style={styles.botonTexto}>Abrir cofre</Text>
+            </TouchableOpacity>
+          )}
+          {mostrarBotonRecurso && (
+            <View>
+              <TouchableOpacity
+                style={[styles.boton, !recursoHabilitado && styles.botonDeshabilitado]}
+                onPress={recolectar}
+                disabled={!recursoHabilitado}
+              >
+                <Text style={styles.botonTexto}>Recolectar</Text>
+              </TouchableOpacity>
+              {!recursoHabilitado && (
+                <Text style={styles.textoFaltaHerramienta}>
+                  Necesitás: {herramientaFaltante?.nombre ?? 'una herramienta'}
+                </Text>
+              )}
+            </View>
+          )}
+        </View>
+      )}
 
       <Text style={styles.ayuda}>Toca una casilla ya descubierta para caminar hasta ahí. Arrastra para mirar el mapa.</Text>
     </View>
@@ -595,6 +829,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     marginBottom: 12,
+  },
+  accionesEncabezado: {
+    alignItems: 'flex-end',
+    gap: 6,
   },
   titulo: {
     fontSize: 24,
@@ -647,9 +885,80 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 15,
   },
+  botonDeshabilitado: {
+    backgroundColor: '#4A4232',
+    opacity: 0.6,
+  },
   error: {
     color: '#E8746A',
     textAlign: 'center',
+    fontSize: 14,
+  },
+  mensajeAccion: {
+    backgroundColor: '#1B2536',
+    borderColor: '#7BC96F',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    marginBottom: 8,
+    alignSelf: 'center',
+  },
+  mensajeAccionTexto: {
+    color: '#7BC96F',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  accionesTile: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 12,
+    marginTop: 8,
+  },
+  textoFaltaHerramienta: {
+    color: '#E8746A',
+    fontSize: 11,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  modalFondo: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContenido: {
+    backgroundColor: '#1B2536',
+    borderRadius: 16,
+    padding: 20,
+    minWidth: 260,
+    maxWidth: '85%',
+  },
+  modalTitulo: {
+    color: '#F6EFD8',
+    fontSize: 18,
+    fontWeight: '800',
+    marginBottom: 12,
+  },
+  modalVacio: {
+    color: '#7E8BA3',
+    fontSize: 13,
+    marginBottom: 12,
+  },
+  modalFila: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+    borderBottomColor: '#2C394D',
+    borderBottomWidth: 1,
+  },
+  modalObjetoNombre: {
+    color: '#F6EFD8',
+    fontSize: 14,
+  },
+  modalObjetoCantidad: {
+    color: '#F4B93F',
+    fontWeight: '700',
     fontSize: 14,
   },
 });

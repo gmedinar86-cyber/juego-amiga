@@ -26,7 +26,6 @@ const SEMI_ANCHO_BASE = CAMARA_RADIO * ANCHO_TILE;
 const SEMI_ALTO_BASE = CAMARA_RADIO * ALTO_TILE;
 const ZOOM_MIN_ABSOLUTO = 0.05;
 const ZOOM_MAX = 2.5;
-const UMBRAL_SNAP = 0.85;
 const MARGEN_ZOOM_ALEJADO = 1.15;
 
 function easeOutCubic(t: number): number {
@@ -437,14 +436,6 @@ export default function PantallaJuego({ session }: { session: Session }) {
             y: offsetInicioGesto.current.y - e.translationY / escala,
           };
           setCameraOffset(limitarOffset(propuesto, centroJugador, limitesRef.current));
-        })
-        .onEnd(() => {
-          const semiAncho = SEMI_ANCHO_BASE / zoomRef.current;
-          const semiAlto = SEMI_ALTO_BASE / zoomRef.current;
-          const actual = cameraOffsetRef.current;
-          if (Math.abs(actual.x) / semiAncho > UMBRAL_SNAP || Math.abs(actual.y) / semiAlto > UMBRAL_SNAP) {
-            setCameraOffset({ x: 0, y: 0 });
-          }
         }),
     []
   );

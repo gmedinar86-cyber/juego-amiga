@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Svg, { Circle, Image as ImagenSvg, Polygon } from 'react-native-svg';
+import Svg, { G, Image as ImagenSvg, Path, Polygon, Polyline } from 'react-native-svg';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import {
@@ -35,8 +35,61 @@ const MARGEN_ZOOM_ALEJADO = 1.15;
 // la perspectiva del mapa.
 const SPRITE_JUGADOR = require('../assets/personajes/maga-fuego-sprite.png');
 const SPRITE_ASPECTO = 628 / 1289; // ancho/alto del PNG original
-const SPRITE_ANCHO = ANCHO_TILE * 0.8;
-const SPRITE_ALTO = SPRITE_ANCHO / SPRITE_ASPECTO;
+const SPRITE_ALTO = ALTO_TILE * 1.6;
+const SPRITE_ANCHO = SPRITE_ALTO * SPRITE_ASPECTO;
+
+// Iconos de recurso/cofre en el mapa: paths copiados de los iconos
+// TreePine/Package de lucide-react-native (v1.28.0, viewBox 24x24) en vez
+// de usar el componente <TreePine>/<Package> directamente — esos componentes
+// se envuelven en su propio <Svg> raíz, y anidar un <Svg> dentro de otro no
+// está soportado de forma fiable en nativo (react-native-svg trata <Svg>
+// como una vista raíz, no un grupo liviano). Usando el path real como <G>/
+// <Path> dentro del <Svg> del mapa se evita ese problema y se ve igual.
+type SegmentoIcono = { tipo: 'path'; d: string } | { tipo: 'polyline'; points: string };
+
+const ICONO_TAMANO = ALTO_TILE * 0.75;
+const ICONO_VIEWBOX = 24;
+
+const ICONO_ARBOL: SegmentoIcono[] = [
+  {
+    tipo: 'path',
+    d: 'm17 14 3 3.3a1 1 0 0 1-.7 1.7H4.7a1 1 0 0 1-.7-1.7L7 14h-.3a1 1 0 0 1-.7-1.7L9 9h-.2A1 1 0 0 1 8 7.3L12 3l4 4.3a1 1 0 0 1-.8 1.7H15l3 3.3a1 1 0 0 1-.7 1.7H17Z',
+  },
+  { tipo: 'path', d: 'M12 22v-3' },
+];
+
+const ICONO_COFRE: SegmentoIcono[] = [
+  {
+    tipo: 'path',
+    d: 'M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z',
+  },
+  { tipo: 'path', d: 'M12 22V12' },
+  { tipo: 'polyline', points: '3.29 7 12 12 20.71 7' },
+  { tipo: 'path', d: 'm7.5 4.27 9 5.15' },
+];
+
+function IconoMapa({ segmentos, x, y, color }: { segmentos: SegmentoIcono[]; x: number; y: number; color: string }) {
+  const escala = ICONO_TAMANO / ICONO_VIEWBOX;
+  return (
+    <G transform={`translate(${x - ICONO_TAMANO / 2}, ${y - ICONO_TAMANO / 2}) scale(${escala})`}>
+      {segmentos.map((s, i) =>
+        s.tipo === 'path' ? (
+          <Path key={i} d={s.d} stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+        ) : (
+          <Polyline
+            key={i}
+            points={s.points}
+            stroke={color}
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            fill="none"
+          />
+        )
+      )}
+    </G>
+  );
+}
 
 function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
@@ -739,7 +792,13 @@ export default function PantallaJuego({ session }: { session: Session }) {
                   descubiertas.has(claveCoord(tile)) && tile.recurso && !recursosRecolectados.has(claveCoord(tile))
               )
               .map(({ tile, pixel }) => (
-                <Circle key={`recurso-${claveCoord(tile)}`} cx={pixel.x} cy={pixel.y} r={5} fill="#7BC96F" />
+                <IconoMapa
+                  key={`recurso-${claveCoord(tile)}`}
+                  segmentos={ICONO_ARBOL}
+                  x={pixel.x}
+                  y={pixel.y}
+                  color="#7BC96F"
+                />
               ))}
 
             {geometria.puntos
@@ -747,14 +806,12 @@ export default function PantallaJuego({ session }: { session: Session }) {
                 ({ tile }) => descubiertas.has(claveCoord(tile)) && tile.cofre && !cofresAbiertos.has(claveCoord(tile))
               )
               .map(({ tile, pixel }) => (
-                <Circle
+                <IconoMapa
                   key={`cofre-${claveCoord(tile)}`}
-                  cx={pixel.x}
-                  cy={pixel.y}
-                  r={6}
-                  fill="#D4A017"
-                  stroke="#1D2A38"
-                  strokeWidth={1.5}
+                  segmentos={ICONO_COFRE}
+                  x={pixel.x}
+                  y={pixel.y}
+                  color="#D4A017"
                 />
               ))}
 
@@ -764,7 +821,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
                 <ImagenSvg
                   href={SPRITE_JUGADOR}
                   x={pixelJugador.x - SPRITE_ANCHO / 2}
-                  y={pixelJugador.y - SPRITE_ALTO / 2}
+                  y={pixelJugador.y - SPRITE_ALTO}
                   width={SPRITE_ANCHO}
                   height={SPRITE_ALTO}
                   preserveAspectRatio="xMidYMid meet"

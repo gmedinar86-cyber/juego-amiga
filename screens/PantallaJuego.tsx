@@ -8,16 +8,17 @@ import {
   claveCoord,
   claveProfundidad,
   coordsEnRadio,
-  distanciaChebyshev,
   esquinasRombo,
   isoAPixel,
-  vecinos,
   type Coord,
 } from '../lib/isoGrid';
-import { esTransitable } from '../lib/generadorTerreno';
+import { encontrarCamino } from '../lib/pathfinding';
 import type { Bioma, DescubrimientoJugador, ProgresoJugador, TileBioma } from '../lib/tipos';
 
-const RADIO_VISION_DEFAULT = 2;
+const RADIO_VISION_DEFAULT = 1;
+const RADIO_VISION_MONTANA = 3;
+const DURACION_PASO_MS = 200;
+const SIN_CAMINO_FLASH_MS = 350;
 const ANCHO_TILE = 72;
 const ALTO_TILE = 36;
 const CAMARA_RADIO = 2.5;
@@ -27,6 +28,10 @@ const ZOOM_MIN_ABSOLUTO = 0.05;
 const ZOOM_MAX = 2.5;
 const UMBRAL_SNAP = 0.85;
 const MARGEN_ZOOM_ALEJADO = 1.15;
+
+function easeOutCubic(t: number): number {
+  return 1 - Math.pow(1 - t, 3);
+}
 
 // DEBUG: muestra el bioma completo sin niebla, solo para esta fase de pruebas.
 // Solo afecta qué color se pinta — no toca `descubiertas` ni lo persistido en
@@ -86,6 +91,8 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const [bioma, setBioma] = useState<Bioma | null>(null);
   const [descubrimientoId, setDescubrimientoId] = useState<string | null>(null);
   const [descubiertas, setDescubiertas] = useState<Map<string, Coord>>(new Map());
+  const [posicionVisual, setPosicionVisual] = useState<Coord>({ x: 0, y: 0 });
+  const [casillaSinCamino, setCasillaSinCamino] = useState<string | null>(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -104,6 +111,18 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const offsetInicioGesto = useRef({ x: 0, y: 0 });
   const zoomInicioGesto = useRef(1);
 
+  // Estado del caminar por pathfinding. posicionVisualRef es la fuente única
+  // de verdad de la posición mientras se anima entre casillas — se actualiza
+  // de forma síncrona en cada frame (no vía efecto), para que una cadena de
+  // pasos encadenados nunca lea una posición vieja. colaRef guarda el camino
+  // restante, incluida la casilla hacia la que ya se está animando (se
+  // descarta recién cuando esa animación termina).
+  const posicionVisualRef = useRef<Coord>({ x: 0, y: 0 });
+  const descubiertasRef = useRef<Map<string, Coord>>(new Map());
+  const colaRef = useRef<Coord[]>([]);
+  const rafIdRef = useRef<number | null>(null);
+  const sinCaminoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     cameraOffsetRef.current = cameraOffset;
   }, [cameraOffset]);
@@ -119,6 +138,10 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
   useEffect(() => {
     cargarPartida();
+    return () => {
+      if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
+      if (sinCaminoTimeoutRef.current) clearTimeout(sinCaminoTimeoutRef.current);
+    };
   }, []);
 
   // Proyección isométrica de cada tile calculada una sola vez por bioma (no en
@@ -138,11 +161,12 @@ export default function PantallaJuego({ session }: { session: Session }) {
   function fusionarDescubiertas(
     actuales: Map<string, Coord>,
     centro: Coord,
-    tilesGrid: TileBioma[]
+    tilesGrid: TileBioma[],
+    radio: number = RADIO_VISION_DEFAULT
   ): Map<string, Coord> {
     const clavesGrid = new Set(tilesGrid.map(claveCoord));
     const resultado = new Map(actuales);
-    for (const c of coordsEnRadio(centro, RADIO_VISION_DEFAULT)) {
+    for (const c of coordsEnRadio(centro, radio)) {
       const k = claveCoord(c);
       if (clavesGrid.has(k)) resultado.set(k, c);
     }
@@ -232,9 +256,14 @@ export default function PantallaJuego({ session }: { session: Session }) {
         setDescubrimientoId(nuevoDesc.id);
       }
 
+      const posicionInicial: Coord = { x: progresoData.posicion_q, y: progresoData.posicion_r };
+      posicionVisualRef.current = posicionInicial;
+      descubiertasRef.current = reveladas;
+
       setProgreso(progresoData);
       setBioma(biomaData);
       setDescubiertas(reveladas);
+      setPosicionVisual(posicionInicial);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error desconocido al cargar la partida.');
     } finally {
@@ -242,49 +271,121 @@ export default function PantallaJuego({ session }: { session: Session }) {
     }
   }
 
-  async function moverA(destino: Coord) {
-    if (!progreso || !bioma || !descubrimientoId) return;
+  function mostrarSinCamino(destino: Coord) {
+    const clave = claveCoord(destino);
+    setCasillaSinCamino(clave);
+    if (sinCaminoTimeoutRef.current) clearTimeout(sinCaminoTimeoutRef.current);
+    sinCaminoTimeoutRef.current = setTimeout(() => setCasillaSinCamino(null), SIN_CAMINO_FLASH_MS);
+  }
 
-    const posicionActual: Coord = { x: progreso.posicion_q, y: progreso.posicion_r };
-    if (distanciaChebyshev(posicionActual, destino) !== 1) return;
-    const tileDestino = tilesPorClave.get(claveCoord(destino));
-    if (!tileDestino || !esTransitable(tileDestino)) return;
+  // Interpola posicionVisual (grid units) desde su valor actual hasta
+  // `destino` en DURACION_PASO_MS, con ease-out. Nunca se corta a medias:
+  // una cancelación solo evita que se programe el paso siguiente.
+  function animarPaso(destino: Coord, alTerminar: () => void) {
+    const origen = posicionVisualRef.current;
+    const inicio = Date.now();
 
-    const actualizadas = fusionarDescubiertas(descubiertas, destino, bioma.tiles.tiles);
-    const huboNuevoDescubrimiento = actualizadas.size !== descubiertas.size;
+    function frame() {
+      const t = Math.min((Date.now() - inicio) / DURACION_PASO_MS, 1);
+      const avance = easeOutCubic(t);
+      const actual: Coord = {
+        x: origen.x + (destino.x - origen.x) * avance,
+        y: origen.y + (destino.y - origen.y) * avance,
+      };
+      posicionVisualRef.current = actual;
+      setPosicionVisual(actual);
 
-    setProgreso({ ...progreso, posicion_q: destino.x, posicion_r: destino.y });
+      if (t < 1) {
+        rafIdRef.current = requestAnimationFrame(frame);
+      } else {
+        rafIdRef.current = null;
+        alTerminar();
+      }
+    }
+    rafIdRef.current = requestAnimationFrame(frame);
+  }
+
+  // Se llama al terminar de animar un paso: confirma la posición, revela
+  // niebla (radio 3 si el tile de llegada es montaña, si no 1), persiste en
+  // Supabase (fire-and-forget) y sigue con el próximo paso de la cola, si
+  // quedó alguno tras un posible redirect.
+  function completarPaso(destinoPaso: Coord) {
+    if (!bioma) return;
+    const tileDestino = tilesPorClave.get(claveCoord(destinoPaso));
+    const radio = tileDestino?.tipo === 'montana' ? RADIO_VISION_MONTANA : RADIO_VISION_DEFAULT;
+
+    const actualizadas = fusionarDescubiertas(descubiertasRef.current, destinoPaso, bioma.tiles.tiles, radio);
+    const huboNuevoDescubrimiento = actualizadas.size !== descubiertasRef.current.size;
+    descubiertasRef.current = actualizadas;
     setDescubiertas(actualizadas);
-    // Caminar siempre vuelve a centrar la cámara en el jugador (conserva el zoom elegido).
-    setCameraOffset({ x: 0, y: 0 });
 
-    const { error: errMover } = await supabase
-      .from('progreso_jugador')
-      .update({ posicion_q: destino.x, posicion_r: destino.y })
-      .eq('id', progreso.id);
-    if (errMover) setError(errMover.message);
+    const progresoAnterior = progresoRef.current;
+    if (progresoAnterior) {
+      const progresoActualizado = { ...progresoAnterior, posicion_q: destinoPaso.x, posicion_r: destinoPaso.y };
+      progresoRef.current = progresoActualizado;
+      setProgreso(progresoActualizado);
 
-    if (huboNuevoDescubrimiento) {
-      const { error: errDesc } = await supabase
+      supabase
+        .from('progreso_jugador')
+        .update({ posicion_q: destinoPaso.x, posicion_r: destinoPaso.y })
+        .eq('id', progresoActualizado.id)
+        .then(({ error: errMover }) => {
+          if (errMover) setError(errMover.message);
+        });
+    }
+
+    if (huboNuevoDescubrimiento && descubrimientoId) {
+      supabase
         .from('descubrimiento_jugador')
         .update({ casillas_descubiertas: Array.from(actualizadas.values()) })
-        .eq('id', descubrimientoId);
-      if (errDesc) setError(errDesc.message);
+        .eq('id', descubrimientoId)
+        .then(({ error: errDesc }) => {
+          if (errDesc) setError(errDesc.message);
+        });
+    }
+
+    colaRef.current.shift();
+    if (colaRef.current.length > 0) {
+      ejecutarSiguientePaso();
     }
   }
 
-  const vecinosAlcanzables = useMemo(() => {
-    if (!progreso || !bioma) return new Set<string>();
-    const posicionActual: Coord = { x: progreso.posicion_q, y: progreso.posicion_r };
-    return new Set(
-      vecinos(posicionActual)
-        .map(claveCoord)
-        .filter((k) => {
-          const tile = tilesPorClave.get(k);
-          return tile !== undefined && esTransitable(tile);
-        })
-    );
-  }, [progreso, bioma, tilesPorClave]);
+  function ejecutarSiguientePaso() {
+    const destino = colaRef.current[0];
+    if (!destino) return;
+    animarPaso(destino, () => completarPaso(destino));
+  }
+
+  // Punto de entrada del tap sobre una casilla descubierta: calcula el
+  // camino con BFS y lo agenda. Si ya hay un camino en curso, el tap actúa
+  // como redirect — el paso que ya está animando (colaRef.current[0]) nunca
+  // se interrumpe, el nuevo tramo simplemente continúa desde ahí en cuanto
+  // ese paso termine.
+  function iniciarCaminoHacia(destino: Coord) {
+    if (!progreso || !bioma) return;
+
+    const enCaminoActual = colaRef.current.length > 0;
+    const origenPlanificacion = enCaminoActual ? colaRef.current[0] : { x: progreso.posicion_q, y: progreso.posicion_r };
+
+    const tramoNuevo = encontrarCamino(origenPlanificacion, destino, tilesPorClave);
+    if (tramoNuevo === null) {
+      mostrarSinCamino(destino);
+      return;
+    }
+
+    // Un solo reseteo de cámara por camino iniciado (no en cada paso), para
+    // no pelearse con un pan manual mientras el personaje camina solo.
+    setCameraOffset({ x: 0, y: 0 });
+
+    if (enCaminoActual) {
+      colaRef.current = [colaRef.current[0], ...tramoNuevo];
+    } else {
+      colaRef.current = tramoNuevo;
+      if (colaRef.current.length > 0) {
+        ejecutarSiguientePaso();
+      }
+    }
+  }
 
   const limitesBioma = useMemo<LimitesBioma | null>(() => {
     if (pixelesBioma.length === 0) return null;
@@ -328,10 +429,9 @@ export default function PantallaJuego({ session }: { session: Session }) {
           offsetInicioGesto.current = cameraOffsetRef.current;
         })
         .onUpdate((e) => {
-          const prog = progresoRef.current;
-          if (!prog) return;
+          if (!progresoRef.current) return;
           const escala = calcularEscala(zoomRef.current);
-          const centroJugador = isoAPixel({ x: prog.posicion_q, y: prog.posicion_r }, ANCHO_TILE, ALTO_TILE);
+          const centroJugador = isoAPixel(posicionVisualRef.current, ANCHO_TILE, ALTO_TILE);
           const propuesto: Coord = {
             x: offsetInicioGesto.current.x - e.translationX / escala,
             y: offsetInicioGesto.current.y - e.translationY / escala,
@@ -371,11 +471,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
     // La proyección isométrica de un grid cuadrado sale ~2:1 (ancho:alto); usar
     // "slice" en vez de "meet" llena la pantalla recortando laterales en vez de
     // dejar huecos arriba/abajo en un móvil vertical.
-    const centroJugador = isoAPixel(
-      { x: progreso.posicion_q, y: progreso.posicion_r },
-      ANCHO_TILE,
-      ALTO_TILE
-    );
+    const centroJugador = isoAPixel(posicionVisual, ANCHO_TILE, ALTO_TILE);
     const semiAncho = SEMI_ANCHO_BASE / zoom;
     const semiAlto = SEMI_ALTO_BASE / zoom;
     const centroX = centroJugador.x + cameraOffset.x;
@@ -399,7 +495,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
       .sort((a, b) => claveProfundidad(a.tile) - claveProfundidad(b.tile));
 
     return { puntos, viewBox };
-  }, [bioma, progreso, cameraOffset, zoom, pixelesBioma]);
+  }, [bioma, progreso, posicionVisual, cameraOffset, zoom, pixelesBioma]);
 
   if (cargando) {
     return (
@@ -447,20 +543,21 @@ export default function PantallaJuego({ session }: { session: Session }) {
           <Svg width="100%" height="100%" viewBox={geometria.viewBox} preserveAspectRatio="xMidYMid slice">
             {geometria.puntos.map(({ tile, pixel }) => {
               const clave = claveCoord(tile);
-              const descubierta = DEBUG_SIN_FOG || descubiertas.has(clave);
-              const esVecino = vecinosAlcanzables.has(clave);
+              const descubierta = descubiertas.has(clave);
+              const revelada = DEBUG_SIN_FOG || descubierta;
+              const sinCamino = casillaSinCamino === clave;
               const puntosPoligono = esquinasRombo(pixel.x, pixel.y, ANCHO_TILE - 3, ALTO_TILE - 3);
 
-              const relleno = descubierta ? colorTile(tile.tipo) : '#1B2536';
+              const relleno = revelada ? colorTile(tile.tipo) : '#1B2536';
 
               return (
                 <Polygon
                   key={clave}
                   points={puntosPoligono}
                   fill={relleno}
-                  stroke={esVecino ? '#F4B93F' : '#2C394D'}
-                  strokeWidth={esVecino ? 2 : 1}
-                  onPress={esVecino ? () => moverA(tile) : undefined}
+                  stroke={sinCamino ? '#E8746A' : '#2C394D'}
+                  strokeWidth={sinCamino ? 2.5 : 1}
+                  onPress={descubierta ? () => iniciarCaminoHacia(tile) : undefined}
                 />
               );
             })}
@@ -472,7 +569,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
               ))}
 
             {(() => {
-              const pixelJugador = isoAPixel({ x: progreso.posicion_q, y: progreso.posicion_r }, ANCHO_TILE, ALTO_TILE);
+              const pixelJugador = isoAPixel(posicionVisual, ANCHO_TILE, ALTO_TILE);
               return <Circle cx={pixelJugador.x} cy={pixelJugador.y} r={9} fill="#F4B93F" stroke="#1D2A38" strokeWidth={2} />;
             })()}
           </Svg>
@@ -483,7 +580,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
         </View>
       </GestureDetector>
 
-      <Text style={styles.ayuda}>Toca una casilla vecina resaltada para moverte. Arrastra para mirar el mapa.</Text>
+      <Text style={styles.ayuda}>Toca una casilla ya descubierta para caminar hasta ahí. Arrastra para mirar el mapa.</Text>
     </View>
   );
 }

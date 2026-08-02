@@ -87,7 +87,7 @@ function generarIntento(n: number, spawn: Coord, portal: Coord): TileBioma[] {
   // El generador no tiene acceso a la DB, así que no puede resolver un
   // objetoId real acá — deja el *nombre* del objeto en `cofrePendiente` y
   // un SQL aparte lo resuelve a `cofre` (ver tipos.ts).
-  esparcirCofres(indice, spawn, portal);
+  esparcirCofres(n, indice, spawn, portal);
 
   return tiles;
 }
@@ -96,14 +96,52 @@ const RADIO_SEGURO_SPAWN = 1;
 const RADIO_ESCONDIDO_COFRE = 4;
 const PROB_ARBOL = 0.035;
 const PROB_RECURSO = 0.02;
-const PROB_COFRE = 0.012;
+const PROB_COFRE = 0.05;
 const LOOT_COFRE_ESCONDIDO = ['Madera', 'Piedra', 'Lana'] as const;
 
-function esparcirCofres(indice: Map<string, TileBioma>, spawn: Coord, portal: Coord) {
+// Un cofre "escondido" de verdad tiene que hacer falta explorar para
+// encontrarlo, no solo estar lejos del spawn en línea recta sobre arena
+// abierta — por eso además se exige que tenga una montaña pegada
+// (cardinal o diagonal): eso los mete en recovecos/entradas de los
+// clusters de montaña, donde hay que rodear para llegar.
+function esVecinoDeMontana(indice: Map<string, TileBioma>, coord: Coord): boolean {
+  return vecinos(coord).some((v) => indice.get(claveCoord(v))?.tipo === 'montana');
+}
+
+// BFS de alcanzabilidad real desde spawn (sobre tiles transitables) — hace
+// falta calcularlo antes de elegir dónde van los cofres: pedir que estén
+// pegados a una montaña los mete justo en la zona con más chance de caer
+// en un bolsón sin salida (ver el hallazgo previo de bolsones inalcanzables
+// por cómo se agrupan los clusters de montaña). Sin este chequeo, muchos
+// cofres terminan en zonas transitables pero inalcanzables — imposibles de
+// conseguir, no solo "escondidos".
+function tilesAlcanzablesDesde(n: number, indice: Map<string, TileBioma>, origen: Coord): Set<string> {
+  const visitado = new Set<string>([claveCoord(origen)]);
+  const cola: Coord[] = [origen];
+  while (cola.length > 0) {
+    const actual = cola.shift()!;
+    for (const vecino of vecinos(actual)) {
+      if (!dentroDelGrid(vecino, n)) continue;
+      const clave = claveCoord(vecino);
+      if (visitado.has(clave)) continue;
+      const tile = indice.get(clave);
+      if (tile && esTransitable(tile)) {
+        visitado.add(clave);
+        cola.push(vecino);
+      }
+    }
+  }
+  return visitado;
+}
+
+function esparcirCofres(n: number, indice: Map<string, TileBioma>, spawn: Coord, portal: Coord) {
+  const alcanzables = tilesAlcanzablesDesde(n, indice, spawn);
   for (const tile of indice.values()) {
     if (tile.tipo !== 'arena' || tile.recurso || tile.cofre) continue;
     if (distanciaChebyshev(tile, spawn) <= RADIO_ESCONDIDO_COFRE) continue;
     if (distanciaChebyshev(tile, portal) <= RADIO_SEGURO_SPAWN) continue;
+    if (!esVecinoDeMontana(indice, tile)) continue;
+    if (!alcanzables.has(claveCoord(tile))) continue;
     if (Math.random() < PROB_COFRE) {
       tile.cofrePendiente = elegir(LOOT_COFRE_ESCONDIDO);
     }

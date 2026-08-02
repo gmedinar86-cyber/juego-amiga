@@ -1,4 +1,4 @@
-import { claveCoord, coordsEnRadio, vecinos, type Coord } from './isoGrid';
+import { claveCoord, coordsEnRadio, distanciaChebyshev, vecinos, type Coord } from './isoGrid';
 import type { GridBioma, TileBioma } from './tipos';
 
 const TIPOS_NO_TRANSITABLES = new Set(['montana', 'rio']);
@@ -59,7 +59,43 @@ function generarIntento(n: number, spawn: Coord, portal: Coord): TileBioma[] {
   const tilePortal = indice.get(claveCoord(portal));
   if (tilePortal) tilePortal.tipo = 'portal';
 
+  // Elementos sueltos (no en clusters como las montañas), transitables como
+  // la madera de prueba: árbol (tipo 'arbol', da recurso 'madera') y
+  // piedra/lana (siguen en 'arena', solo cambia el recurso). Se esparcen
+  // DESPUÉS de despejarRadio para no pisar la zona segura del spawn/portal,
+  // y cada llamada solo considera tiles que sigan en 'arena' sin recurso
+  // (así nunca compiten entre sí por la misma casilla).
+  esparcirElementos(indice, spawn, portal, PROB_ARBOL, (tile) => {
+    tile.tipo = 'arbol';
+    tile.recurso = 'madera';
+  });
+  esparcirElementos(indice, spawn, portal, PROB_RECURSO, (tile) => {
+    tile.recurso = 'piedra';
+  });
+  esparcirElementos(indice, spawn, portal, PROB_RECURSO, (tile) => {
+    tile.recurso = 'lana';
+  });
+
   return tiles;
+}
+
+const RADIO_SEGURO_SPAWN = 1;
+const PROB_ARBOL = 0.035;
+const PROB_RECURSO = 0.02;
+
+function esparcirElementos(
+  indice: Map<string, TileBioma>,
+  spawn: Coord,
+  portal: Coord,
+  probabilidad: number,
+  aplicar: (tile: TileBioma) => void
+) {
+  for (const tile of indice.values()) {
+    if (tile.tipo !== 'arena' || tile.recurso) continue;
+    if (distanciaChebyshev(tile, spawn) <= RADIO_SEGURO_SPAWN) continue;
+    if (distanciaChebyshev(tile, portal) <= RADIO_SEGURO_SPAWN) continue;
+    if (Math.random() < probabilidad) aplicar(tile);
+  }
 }
 
 function generarClusterMontana(

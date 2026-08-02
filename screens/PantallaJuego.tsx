@@ -242,7 +242,11 @@ function texturaRio(tile: TileBioma, tilesPorClave: Map<string, TileBioma>): Tex
   return piezaPlano(TEXTURA_RIO_CONFLUENCIA);
 }
 
-function texturaParaTile(tile: TileBioma, tilesPorClave: Map<string, TileBioma>): Textura | null {
+function texturaParaTile(
+  tile: TileBioma,
+  tilesPorClave: Map<string, TileBioma>,
+  recolectado: boolean
+): Textura | null {
   switch (tile.tipo) {
     case 'arena':
       return TEXTURA_ARENA;
@@ -252,6 +256,10 @@ function texturaParaTile(tile: TileBioma, tilesPorClave: Map<string, TileBioma>)
       return TEXTURA_OASIS;
     case 'montana':
       return texturaMontana(tile);
+    case 'arbol':
+      // Ya recolectado (madera): vuelve a verse como arena plana, igual que
+      // piedra/lana cuando se juntan (ver el filtro de íconos más abajo).
+      return recolectado ? TEXTURA_ARENA : TEXTURA_ARBOL_SECO;
     default:
       return null; // portal u otros tipos sin textura: sigue con colorTile
   }
@@ -313,6 +321,27 @@ const ICONO_ARBOL: SegmentoIcono[] = [
   },
   { tipo: 'path', d: 'M12 22v-3' },
 ];
+
+// Placeholders (sin arte propio todavía) para piedra/lana: paths de los
+// iconos lucide "Gem" (mineral) y "Cloud" (aproximación de vellón/lana),
+// mismo criterio que ICONO_ARBOL/ICONO_COFRE de arriba.
+const ICONO_ROCA: SegmentoIcono[] = [
+  { tipo: 'path', d: 'M6 3h12l4 6-10 13L2 9Z' },
+  { tipo: 'path', d: 'M11 3 8 9l4 13 4-13-3-6' },
+  { tipo: 'path', d: 'M2 9h20' },
+];
+
+const ICONO_OVEJA: SegmentoIcono[] = [
+  { tipo: 'path', d: 'M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z' },
+];
+
+// Qué ícono/color usar para cada tipo de recurso de tile — agregar un nuevo
+// recurso (data-driven, ver lib/objetos.ts) solo necesita una entrada acá.
+const ICONOS_RECURSO: Record<string, { segmentos: SegmentoIcono[]; color: string }> = {
+  madera: { segmentos: ICONO_ARBOL, color: '#7BC96F' },
+  piedra: { segmentos: ICONO_ROCA, color: '#9AA5B1' },
+  lana: { segmentos: ICONO_OVEJA, color: '#F2F2F2' },
+};
 
 const ICONO_COFRE: SegmentoIcono[] = [
   {
@@ -1218,7 +1247,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
               // Textura solo en tiles revelados — si se dibujara también en
               // niebla, la silueta (montaña, río) se filtraría a través del
               // fill oscuro de fog, que es una capa aparte con su propio alfa.
-              const textura = revelada ? texturaParaTile(tile, tilesPorClave) : null;
+              const textura = revelada ? texturaParaTile(tile, tilesPorClave, recursosRecolectados.has(clave)) : null;
 
               return (
                 <Fragment key={clave}>
@@ -1287,17 +1316,27 @@ export default function PantallaJuego({ session }: { session: Session }) {
             {geometria.puntos
               .filter(
                 ({ tile }) =>
-                  descubiertas.has(claveCoord(tile)) && tile.recurso && !recursosRecolectados.has(claveCoord(tile))
+                  descubiertas.has(claveCoord(tile)) &&
+                  tile.recurso &&
+                  !recursosRecolectados.has(claveCoord(tile)) &&
+                  // 'arbol' ya tiene su propia textura de tile (dead-tree.png)
+                  // que deja claro qué es — el ícono encima sería redundante.
+                  // Los tiles de madera "sueltos" (tipo 'arena', de prueba)
+                  // sí lo necesitan, como piedra/lana.
+                  tile.tipo !== 'arbol'
               )
-              .map(({ tile, pixel }) => (
-                <IconoMapa
-                  key={`recurso-${claveCoord(tile)}`}
-                  segmentos={ICONO_ARBOL}
-                  x={pixel.x}
-                  y={pixel.y}
-                  color="#7BC96F"
-                />
-              ))}
+              .map(({ tile, pixel }) => {
+                const icono = ICONOS_RECURSO[tile.recurso!] ?? ICONOS_RECURSO.madera;
+                return (
+                  <IconoMapa
+                    key={`recurso-${claveCoord(tile)}`}
+                    segmentos={icono.segmentos}
+                    x={pixel.x}
+                    y={pixel.y}
+                    color={icono.color}
+                  />
+                );
+              })}
 
             {geometria.puntos
               .filter(

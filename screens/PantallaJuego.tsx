@@ -333,10 +333,12 @@ function texturaParaTile(
       // Ya recolectado (madera): vuelve a verse como arena plana, igual que
       // piedra/lana cuando se juntan (ver el filtro de íconos más abajo).
       return recolectado ? TEXTURA_ARENA : TEXTURA_ARBOL_SECO;
-    case 'roca_clase':
+    case 'portal':
+      // La roca de cambio de rol se usa también como portal — mismo objeto
+      // en el mundo, doble función (ver assets/entorno/roca-cambio-rol.png).
       return TEXTURA_ROCA_CLASE;
     default:
-      return null; // portal u otros tipos sin textura: sigue con colorTile
+      return null; // otros tipos sin textura: sigue con colorTile
   }
 }
 
@@ -485,11 +487,13 @@ function colorTile(tipo: string): string {
       return '#5C5348';
     case 'rio':
       return '#2E6F8E';
-    case 'portal':
-      return '#8B5CF6';
     case 'oasis':
       return '#2E7D6B';
     default:
+      // 'portal' cae acá a propósito: ahora tiene textura propia (la roca
+      // de cambio de rol, ver texturaParaTile) que no cubre todo el rombo
+      // (es una roca "suelta", no un bloque como sand/montaña), así que el
+      // fondo visible alrededor debe ser arena, no un color de relleno.
       return '#B98A4A';
   }
 }

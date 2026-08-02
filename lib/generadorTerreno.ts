@@ -52,6 +52,12 @@ function generarIntento(n: number, spawn: Coord, portal: Coord): TileBioma[] {
   for (let r = 0; r < numRios; r++) {
     generarRio(n, indice);
   }
+  // Una sola pasada no alcanza a sanar cadenas (A cerca de B en diagonal,
+  // y la esquina recién agregada para unirlos queda a su vez en diagonal
+  // de C) — repetir hasta que no cambie nada más, con un tope por las dudas.
+  for (let pasada = 0; pasada < 4; pasada++) {
+    if (!sanarUnionesDiagonales(indice)) break;
+  }
 
   despejarRadio(indice, spawn, 2);
   despejarRadio(indice, portal, 2);
@@ -83,62 +89,8 @@ function generarIntento(n: number, spawn: Coord, portal: Coord): TileBioma[] {
   // un SQL aparte lo resuelve a `cofre` (ver tipos.ts).
   esparcirCofres(indice, spawn, portal);
 
-  // Roca de cambio de rol: una por bioma, "de no fácil acceso" — se coloca
-  // en la casilla transitable más lejana del spawn (por pasos reales, no
-  // en línea recta, así que cuenta rodear montañas/río) que además sea
-  // efectivamente alcanzable. Solo el punto en el mapa por ahora, sin
-  // función todavía (eso se define más adelante).
-  colocarRocaClase(n, indice, spawn, portal);
-
   return tiles;
 }
-
-function colocarRocaClase(n: number, indice: Map<string, TileBioma>, spawn: Coord, portal: Coord) {
-  const distancias = new Map<string, number>([[claveCoord(spawn), 0]]);
-  const cola: Coord[] = [spawn];
-  while (cola.length > 0) {
-    const actual = cola.shift()!;
-    const dActual = distancias.get(claveCoord(actual))!;
-    for (const vecino of vecinos(actual)) {
-      if (!dentroDelGrid(vecino, n)) continue;
-      const clave = claveCoord(vecino);
-      if (distancias.has(clave)) continue;
-      const tile = indice.get(clave);
-      if (!tile || !esTransitable(tile)) continue;
-      distancias.set(clave, dActual + 1);
-      cola.push(vecino);
-    }
-  }
-
-  // La roca queda lejos del spawn, pero NO puede terminar pegada al portal:
-  // ese es el punto más lejano del spawn con más frecuencia (spawn y portal
-  // están en esquinas opuestas), y ahí más adelante va un boss final —
-  // necesita su propio espacio, sin la roca de por medio. Se descartan los
-  // candidatos dentro de RADIO_RESERVADO_PORTAL antes de elegir el más
-  // lejano del spawn entre los que queden; si ningún candidato sobrevive
-  // ese filtro (mapas muy chicos), se repite sin el filtro para garantizar
-  // que la roca siempre se coloque en algún lado.
-  const elegirMejor = (respetarReservaPortal: boolean): TileBioma | null => {
-    let mejor: TileBioma | null = null;
-    let mejorDistancia = -1;
-    for (const [clave, distancia] of distancias) {
-      const tile = indice.get(clave)!;
-      if (respetarReservaPortal && distanciaChebyshev(tile, portal) <= RADIO_RESERVADO_PORTAL) continue;
-      if (!respetarReservaPortal && clave === claveCoord(portal)) continue;
-      if (tile.tipo !== 'arena' || tile.recurso || tile.cofre || tile.cofrePendiente) continue;
-      if (distancia > mejorDistancia) {
-        mejorDistancia = distancia;
-        mejor = tile;
-      }
-    }
-    return mejor;
-  };
-
-  const mejor = elegirMejor(true) ?? elegirMejor(false);
-  if (mejor) mejor.tipo = 'roca_clase';
-}
-
-const RADIO_RESERVADO_PORTAL = 6;
 
 const RADIO_SEGURO_SPAWN = 1;
 const RADIO_ESCONDIDO_COFRE = 4;
@@ -324,6 +276,48 @@ function generarRio(n: number, indice: Map<string, TileBioma>) {
     if (desvia) tramoActualEsAncho = false;
     actual = { x: actual.x + delta.x, y: actual.y + delta.y };
   }
+}
+
+const DIAGONALES: Coord[] = [
+  { x: 1, y: -1 },
+  { x: 1, y: 1 },
+  { x: -1, y: 1 },
+  { x: -1, y: -1 },
+];
+
+// Con numRios independientes (cada uno un random walk sin conocimiento de
+// los demás), es común que dos tramos de ríos distintos terminen a un paso
+// DIAGONAL uno del otro sin llegar a compartir un borde cardinal — el
+// autotiling (cardinal-only, ver texturaRio en PantallaJuego.tsx) los
+// dibuja entonces como dos remates "fin" sueltos, uno pegado al otro sin
+// conectar, en vez de una curva continua. Se "sana" tendiendo un puente:
+// para cada tile de río con 0-1 vecinos cardinales que tenga un vecino
+// diagonal también de río, se convierte una de las dos esquinas que
+// completarían el camino cardinal entre ambos.
+function sanarUnionesDiagonales(indice: Map<string, TileBioma>): boolean {
+  let cambio = false;
+  const rioTiles = Array.from(indice.values()).filter((t) => t.tipo === 'rio');
+  for (const t of rioTiles) {
+    const vecinosCardinales = CARDINALES.filter(
+      (d) => indice.get(claveCoord({ x: t.x + d.x, y: t.y + d.y }))?.tipo === 'rio'
+    ).length;
+    if (vecinosCardinales > 1) continue;
+
+    for (const d of DIAGONALES) {
+      const vecinoDiag = indice.get(claveCoord({ x: t.x + d.x, y: t.y + d.y }));
+      if (vecinoDiag?.tipo !== 'rio') continue;
+
+      const esquinaA = indice.get(claveCoord({ x: t.x + d.x, y: t.y }));
+      const esquinaB = indice.get(claveCoord({ x: t.x, y: t.y + d.y }));
+      const candidato = [esquinaA, esquinaB].find((c) => c?.tipo === 'arena');
+      if (candidato) {
+        candidato.tipo = 'rio';
+        cambio = true;
+        break;
+      }
+    }
+  }
+  return cambio;
 }
 
 function marcarSiExiste(indice: Map<string, TileBioma>, coord: Coord, tipo: string) {

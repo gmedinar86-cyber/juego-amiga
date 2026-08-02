@@ -56,6 +56,15 @@ export function isoAPixel(c: Coord, anchoTile: number, altoTile: number): { x: n
   };
 }
 
+// Inversa de isoAPixel: de un punto en pixeles isométricos a coordenadas de
+// grid (redondeadas al tile más cercano). Se usa para ubicar a qué tile
+// corresponde un toque de Gesture.Tap, que solo da el punto en pantalla.
+export function pixelAGrid(px: number, py: number, anchoTile: number, altoTile: number): Coord {
+  const a = px / (anchoTile / 2); // = x - y
+  const b = py / (altoTile / 2); // = x + y
+  return { x: Math.round((a + b) / 2), y: Math.round((b - a) / 2) };
+}
+
 export function esquinasRombo(cx: number, cy: number, anchoTile: number, altoTile: number): string {
   const puntos = [
     { x: cx, y: cy - altoTile / 2 },

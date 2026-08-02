@@ -9,6 +9,7 @@ import {
   claveProfundidad,
   esquinasRombo,
   isoAPixel,
+  pixelAGrid,
   type Coord,
 } from '../lib/isoGrid';
 import { encontrarCamino, tilesAlcanzables } from '../lib/pathfinding';
@@ -178,6 +179,13 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const tamanoRef = useRef(tamanoContenedor);
   const offsetInicioGesto = useRef({ x: 0, y: 0 });
   const zoomInicioGesto = useRef(1);
+  // tilesPorClaveRef e iniciarCaminoHaciaRef: gestoTap se crea una sola vez
+  // (useMemo con deps []), así que cualquier valor que lea desde adentro
+  // tiene que venir de un ref actualizado, no de la variable/función del
+  // render en el que se creó — si no, quedaría pegado al Map vacío y al
+  // iniciarCaminoHacia con progreso/bioma en null del primer render.
+  const tilesPorClaveRef = useRef<Map<string, TileBioma>>(new Map());
+  const iniciarCaminoHaciaRef = useRef<(destino: Coord) => void>(() => {});
 
   // Estado del caminar por pathfinding. posicionVisualRef es la fuente única
   // de verdad de la posición mientras se anima entre casillas — se actualiza
@@ -227,6 +235,10 @@ export default function PantallaJuego({ session }: { session: Session }) {
     for (const tile of bioma.tiles.tiles) mapa.set(claveCoord(tile), tile);
     return mapa;
   }, [bioma]);
+
+  useEffect(() => {
+    tilesPorClaveRef.current = tilesPorClave;
+  }, [tilesPorClave]);
 
   function fusionarDescubiertas(
     actuales: Map<string, Coord>,
@@ -491,6 +503,13 @@ export default function PantallaJuego({ session }: { session: Session }) {
       console.log('[MOV] iniciarCaminoHacia: ABORTA por !progreso/!bioma');
       return;
     }
+    // Gate de niebla: antes vivía en el onPress condicional del Polygon;
+    // ahora que el tap se detecta por geometría (Gesture.Tap), tiene que
+    // vivir acá para que cualquier llamador quede protegido igual.
+    if (!descubiertas.has(claveCoord(destino))) {
+      console.log('[MOV] iniciarCaminoHacia: ABORTA, destino en niebla');
+      return;
+    }
 
     const enCaminoActual = colaRef.current.length > 0;
     const origenPlanificacion = enCaminoActual ? colaRef.current[0] : { x: progreso.posicion_q, y: progreso.posicion_r };
@@ -517,6 +536,10 @@ export default function PantallaJuego({ session }: { session: Session }) {
       }
     }
   }
+  // Reasignado en cada render (no useEffect: tiene que estar listo apenas
+  // se comitea, no un tick después) para que gestoTap, con su closure
+  // congelada desde el montaje, siempre llame a la versión más reciente.
+  iniciarCaminoHaciaRef.current = iniciarCaminoHacia;
 
   function mostrarMensaje(texto: string) {
     setMensajeAccion(texto);
@@ -647,6 +670,53 @@ export default function PantallaJuego({ session }: { session: Session }) {
     return Math.max(width / vbAncho, height / vbAlto);
   }
 
+  // Inversa de todo lo que arma `geometria.viewBox`: de un punto tocado
+  // (relativo al contenedor del mapa) a qué tile del grid corresponde.
+  // Necesario porque Gesture.Tap, a diferencia de Polygon.onPress, no sabe
+  // sobre qué polígono cayó el toque — solo da el punto en pantalla.
+  function tileDesdeToque(localX: number, localY: number): TileBioma | null {
+    const { width, height } = tamanoRef.current;
+    if (!width || !height) return null;
+
+    const zoomActual = zoomRef.current;
+    const escala = calcularEscala(zoomActual);
+    const semiAncho = SEMI_ANCHO_BASE / zoomActual;
+    const semiAlto = SEMI_ALTO_BASE / zoomActual;
+
+    const centroJugador = isoAPixel(posicionVisualRef.current, ANCHO_TILE, ALTO_TILE);
+    const centroX = centroJugador.x + cameraOffsetRef.current.x;
+    const centroY = centroJugador.y + cameraOffsetRef.current.y;
+    const viewBoxMinX = centroX - semiAncho;
+    const viewBoxMinY = centroY - semiAlto;
+    const viewBoxAncho = semiAncho * 2;
+    const viewBoxAlto = semiAlto * 2;
+
+    // "xMidYMid slice": el contenido se escala de forma uniforme para
+    // cubrir el contenedor y se recorta lo que sobra, centrado — hay que
+    // deshacer ese offset de centrado antes de pasar a coordenadas de
+    // viewBox.
+    const offsetX = (width - viewBoxAncho * escala) / 2;
+    const offsetY = (height - viewBoxAlto * escala) / 2;
+
+    const svgX = viewBoxMinX + (localX - offsetX) / escala;
+    const svgY = viewBoxMinY + (localY - offsetY) / escala;
+
+    const coordGrid = pixelAGrid(svgX, svgY, ANCHO_TILE, ALTO_TILE);
+    return tilesPorClaveRef.current.get(claveCoord(coordGrid)) ?? null;
+  }
+
+  const gestoTap = useMemo(
+    () =>
+      Gesture.Tap()
+        .maxDistance(20)
+        .onStart((e) => {
+          const tile = tileDesdeToque(e.x, e.y);
+          console.log('[MOV-GESTO] tap reconocido', { x: e.x, y: e.y, tile });
+          if (tile) iniciarCaminoHaciaRef.current(tile);
+        }),
+    []
+  );
+
   const gestoPan = useMemo(
     () =>
       Gesture.Pan()
@@ -696,7 +766,17 @@ export default function PantallaJuego({ session }: { session: Session }) {
     []
   );
 
-  const gestoCompuesto = useMemo(() => Gesture.Simultaneous(gestoPan, gestoPinch), [gestoPan, gestoPinch]);
+  // Race entre tap y pan: ambos arrancan a evaluar juntos apenas el dedo
+  // toca. El pan responde de inmediato en cuanto cruza minDistance(20) (no
+  // espera a que el tap "falle" primero, como pasaría con Exclusive). El
+  // tap solo se reconoce al soltar, y solo si el movimiento se mantuvo por
+  // debajo de maxDistance(20) — mismo umbral que minDistance del pan, sin
+  // zona muerta entre los dos. El pinch sigue simultáneo aparte, como
+  // antes, para que pan+pinch de dos dedos se sigan sintiendo igual.
+  const gestoCompuesto = useMemo(
+    () => Gesture.Simultaneous(Gesture.Race(gestoTap, gestoPan), gestoPinch),
+    [gestoTap, gestoPan, gestoPinch]
+  );
 
   const geometria = useMemo(() => {
     if (!bioma || !progreso || pixelesBioma.length === 0) return null;
@@ -830,7 +910,6 @@ export default function PantallaJuego({ session }: { session: Session }) {
                   fill={relleno}
                   stroke={sinCamino ? '#E8746A' : '#2C394D'}
                   strokeWidth={sinCamino ? 2.5 : 1}
-                  onPress={descubierta ? () => iniciarCaminoHacia(tile) : undefined}
                 />
               );
             })}

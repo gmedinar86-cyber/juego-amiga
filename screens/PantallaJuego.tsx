@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Svg, { G, Image as ImagenSvg, Path, Polygon, Polyline } from 'react-native-svg';
+import Svg, { Circle, G, Image as ImagenSvg, Path, Polygon, Polyline } from 'react-native-svg';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import {
@@ -10,6 +10,7 @@ import {
   esquinasRombo,
   isoAPixel,
   pixelAGrid,
+  vecinos,
   type Coord,
 } from '../lib/isoGrid';
 import { encontrarCamino, tilesAlcanzables } from '../lib/pathfinding';
@@ -55,7 +56,9 @@ function crearTextura(fuente: number, anchoOriginal: number, altoOriginal: numbe
 }
 
 const TEXTURA_ARENA = crearTextura(require('../assets/tiles/sand.png'), 263, 199);
-const TEXTURA_RIO = crearTextura(require('../assets/tiles/river.png'), 265, 197);
+// river.png queda sin usar por ahora (el agua se dibuja por código, ver
+// rioGeometria más abajo) — el archivo se deja en el repo por si sirve para
+// otra cosa más adelante (ej. un ícono de "necesitás cantimplora").
 const TEXTURA_OASIS = crearTextura(require('../assets/tiles/oasis.png'), 263, 243);
 const TEXTURA_MONTANA = crearTextura(require('../assets/tiles/mountain.png'), 265, 243);
 const TEXTURA_ARBOL_SECO = crearTextura(require('../assets/tiles/dead-tree.png'), 263, 278);
@@ -74,9 +77,8 @@ function texturaMontana(tile: TileBioma): Textura {
 function texturaParaTile(tile: TileBioma): Textura | null {
   switch (tile.tipo) {
     case 'arena':
+    case 'rio': // el agua se dibuja aparte, encima (rioGeometria) — la base sigue siendo arena
       return TEXTURA_ARENA;
-    case 'rio':
-      return TEXTURA_RIO;
     case 'oasis':
       return TEXTURA_OASIS;
     case 'montana':
@@ -84,6 +86,43 @@ function texturaParaTile(tile: TileBioma): Textura | null {
     default:
       return null; // portal u otros tipos sin textura: sigue con colorTile
   }
+}
+
+// --- Río como cauce continuo calculado por código (ver plan) ---
+const ANCHO_RIO_BASE = ALTO_TILE * 0.6;
+const ANCHO_RIO_ANCHO = ANCHO_RIO_BASE * 1.6;
+const RIO_BORDE_EXTRA = 6;
+const COLOR_RIO_AGUA = '#2E6F8E'; // mismo azul que ya usaba colorTile('rio')
+const COLOR_RIO_BORDE = '#1B4E63';
+
+interface JuntaRio {
+  tile: TileBioma;
+  pixel: Coord;
+  ancho: number;
+}
+
+interface TramoRio {
+  a: JuntaRio;
+  b: JuntaRio;
+  ancho: number;
+}
+
+// Franja (quad) entre dos centros de tile, perpendicular a la dirección
+// entre ellos. Junto con un círculo del mismo ancho en cada extremo (ver
+// render), forma una cinta continua sin costuras en ningún ángulo.
+function franjaAgua(pa: Coord, pb: Coord, ancho: number): string {
+  const dx = pb.x - pa.x;
+  const dy = pb.y - pa.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const px = (-dy / len) * (ancho / 2);
+  const py = (dx / len) * (ancho / 2);
+  const puntos = [
+    { x: pa.x + px, y: pa.y + py },
+    { x: pb.x + px, y: pb.y + py },
+    { x: pb.x - px, y: pb.y - py },
+    { x: pa.x - px, y: pa.y - py },
+  ];
+  return puntos.map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
 }
 
 // Iconos de recurso/cofre en el mapa: paths copiados de los iconos
@@ -287,6 +326,46 @@ export default function PantallaJuego({ session }: { session: Session }) {
   useEffect(() => {
     tilesPorClaveRef.current = tilesPorClave;
   }, [tilesPorClave]);
+
+  // Geometría del río: se calcula una sola vez por bioma (datos estáticos de
+  // terreno, no dependen de la posición del jugador). juntas = un círculo por
+  // cada tile de río; tramos = una franja por cada par de tiles de río
+  // adyacentes (8 direcciones), sin duplicar el par. El ancho por tile sale
+  // de cuántos vecinos también son río: más de 2 vecinos-río (las zonas
+  // donde el generador ya puso dos filas paralelas, o confluencias) dan un
+  // tramo más ancho; si no, ancho base.
+  const rioGeometria = useMemo(() => {
+    if (!bioma) return { juntas: [] as JuntaRio[], tramos: [] as TramoRio[] };
+
+    const rioTiles = bioma.tiles.tiles.filter((t) => t.tipo === 'rio');
+
+    function anchoLocal(tile: TileBioma): number {
+      const vecinosRio = vecinos(tile).filter((v) => tilesPorClave.get(claveCoord(v))?.tipo === 'rio').length;
+      return vecinosRio > 2 ? ANCHO_RIO_ANCHO : ANCHO_RIO_BASE;
+    }
+
+    const juntas: JuntaRio[] = rioTiles.map((tile) => ({
+      tile,
+      pixel: isoAPixel(tile, ANCHO_TILE, ALTO_TILE),
+      ancho: anchoLocal(tile),
+    }));
+    const juntaPorClave = new Map(juntas.map((j) => [claveCoord(j.tile), j]));
+
+    const tramos: TramoRio[] = [];
+    const procesados = new Set<string>();
+    for (const junta of juntas) {
+      for (const vecino of vecinos(junta.tile)) {
+        const juntaVecino = juntaPorClave.get(claveCoord(vecino));
+        if (!juntaVecino) continue;
+        const parClave = [claveCoord(junta.tile), claveCoord(vecino)].sort().join('|');
+        if (procesados.has(parClave)) continue;
+        procesados.add(parClave);
+        tramos.push({ a: junta, b: juntaVecino, ancho: Math.min(junta.ancho, juntaVecino.ancho) });
+      }
+    }
+
+    return { juntas, tramos };
+  }, [bioma, tilesPorClave]);
 
   function fusionarDescubiertas(
     actuales: Map<string, Coord>,
@@ -887,6 +966,10 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const herramientaFaltante =
     tileActual?.recurso && !recursoHabilitado ? herramientaParaRecurso(catalogoObjetos, tileActual.recurso) : undefined;
 
+  const tileRevelado = (t: TileBioma) => DEBUG_SIN_FOG || descubiertas.has(claveCoord(t));
+  const juntasRioVisibles = rioGeometria.juntas.filter((j) => tileRevelado(j.tile));
+  const tramosRioVisibles = rioGeometria.tramos.filter((t) => tileRevelado(t.a.tile) && tileRevelado(t.b.tile));
+
   return (
     <View style={styles.contenedor}>
       <View style={styles.encabezado}>
@@ -976,6 +1059,43 @@ export default function PantallaJuego({ session }: { session: Session }) {
                 </Fragment>
               );
             })}
+
+            {/* Río: cauce continuo calculado (juntas + tramos), no imagen por
+                tile. Borde oscuro primero (más ancho) y agua encima (ancho
+                real) — el borde asomando alrededor da la sensación de cauce
+                hundido en la arena. */}
+            {juntasRioVisibles.map((j) => (
+              <Circle
+                key={`rio-borde-j-${claveCoord(j.tile)}`}
+                cx={j.pixel.x}
+                cy={j.pixel.y}
+                r={(j.ancho + RIO_BORDE_EXTRA) / 2}
+                fill={COLOR_RIO_BORDE}
+              />
+            ))}
+            {tramosRioVisibles.map((t) => (
+              <Polygon
+                key={`rio-borde-t-${[claveCoord(t.a.tile), claveCoord(t.b.tile)].sort().join('_')}`}
+                points={franjaAgua(t.a.pixel, t.b.pixel, t.ancho + RIO_BORDE_EXTRA)}
+                fill={COLOR_RIO_BORDE}
+              />
+            ))}
+            {juntasRioVisibles.map((j) => (
+              <Circle
+                key={`rio-agua-j-${claveCoord(j.tile)}`}
+                cx={j.pixel.x}
+                cy={j.pixel.y}
+                r={j.ancho / 2}
+                fill={COLOR_RIO_AGUA}
+              />
+            ))}
+            {tramosRioVisibles.map((t) => (
+              <Polygon
+                key={`rio-agua-t-${[claveCoord(t.a.tile), claveCoord(t.b.tile)].sort().join('_')}`}
+                points={franjaAgua(t.a.pixel, t.b.pixel, t.ancho)}
+                fill={COLOR_RIO_AGUA}
+              />
+            ))}
 
             {geometria.puntos
               .filter(

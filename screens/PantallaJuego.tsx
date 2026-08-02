@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Svg, { Circle, G, Image as ImagenSvg, Path, Polygon, Polyline } from 'react-native-svg';
 import type { Session } from '@supabase/supabase-js';
@@ -1062,6 +1062,17 @@ export default function PantallaJuego({ session }: { session: Session }) {
     []
   );
 
+  // Botones de zoom (paso multiplicativo, mismo criterio que el pinch) —
+  // solo para web: el trackpad de una notebook/Chromebook no siempre hace
+  // bien el gesto de pellizco, a diferencia del táctil real en mobile.
+  const PASO_ZOOM = 1.25;
+  function acercarZoom() {
+    setZoom((z) => Math.min(z * PASO_ZOOM, ZOOM_MAX));
+  }
+  function alejarZoom() {
+    setZoom((z) => Math.max(z / PASO_ZOOM, zoomMinRef.current));
+  }
+
   // Race entre tap y pan: ambos arrancan a evaluar juntos apenas el dedo
   // toca. El pan responde de inmediato en cuanto cruza minDistance(20) (no
   // espera a que el tap "falle" primero, como pasaría con Exclusive). El
@@ -1320,6 +1331,17 @@ export default function PantallaJuego({ session }: { session: Session }) {
           <TouchableOpacity style={styles.botonCentrar} onPress={() => setCameraOffset({ x: 0, y: 0 })}>
             <Text style={styles.botonCentrarTexto}>Centrar</Text>
           </TouchableOpacity>
+
+          {Platform.OS === 'web' && (
+            <View style={styles.controlesZoom}>
+              <TouchableOpacity style={styles.botonZoom} onPress={acercarZoom}>
+                <Text style={styles.botonZoomTexto}>+</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.botonZoom} onPress={alejarZoom}>
+                <Text style={styles.botonZoomTexto}>−</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       </GestureDetector>
 
@@ -1406,6 +1428,28 @@ const styles = StyleSheet.create({
     color: '#F4B93F',
     fontWeight: '700',
     fontSize: 13,
+  },
+  controlesZoom: {
+    position: 'absolute',
+    right: 12,
+    bottom: 56,
+    gap: 8,
+  },
+  botonZoom: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#1B2536',
+    borderColor: '#F4B93F',
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  botonZoomTexto: {
+    color: '#F4B93F',
+    fontWeight: '700',
+    fontSize: 20,
+    lineHeight: 22,
   },
   ayuda: {
     fontSize: 12,

@@ -91,39 +91,93 @@ function generarClusterMontana(
 }
 
 const LADOS = ['arriba', 'abajo', 'izquierda', 'derecha'] as const;
+const CARDINALES: Coord[] = [
+  { x: 0, y: -1 },
+  { x: 1, y: 0 },
+  { x: 0, y: 1 },
+  { x: -1, y: 0 },
+];
+
+// Busca nacer el río pegado a una montaña (como en la vida real, un
+// nacimiento/manantial) en vez de en arena plana al borde del mapa. Elige
+// una montaña al azar y un vecino cardinal suyo que sea arena — el río
+// arranca ahí, fluyendo hacia afuera de la montaña. Si no encuentra un
+// candidato válido en varios intentos (mapas casi sin montaña, montañas
+// totalmente rodeadas de otras montañas, etc.), devuelve null y el
+// llamador cae al método viejo (nacer en un borde del mapa).
+function buscarInicioJuntoAMontana(
+  n: number,
+  indice: Map<string, TileBioma>
+): { pos: Coord; direccion: Coord } | null {
+  const montanas = Array.from(indice.values()).filter((t) => t.tipo === 'montana');
+  if (montanas.length === 0) return null;
+
+  for (let intento = 0; intento < 20; intento++) {
+    const montana = montanas[aleatorioEntero(0, montanas.length - 1)];
+    const candidatos = CARDINALES.map((d) => ({
+      pos: { x: montana.x + d.x, y: montana.y + d.y },
+      // El río fluye alejándose de la montaña: dirección opuesta a la que
+      // apunta desde el candidato hacia la montaña.
+      direccion: { x: -d.x, y: -d.y },
+    })).filter(
+      (c) => dentroDelGrid(c.pos, n) && indice.get(claveCoord(c.pos))?.tipo === 'arena'
+    );
+    if (candidatos.length > 0) {
+      return candidatos[aleatorioEntero(0, candidatos.length - 1)];
+    }
+  }
+  return null;
+}
 
 function generarRio(n: number, indice: Map<string, TileBioma>) {
-  const lado = elegir(LADOS);
+  const inicioMontana = Math.random() < 0.6 ? buscarInicioJuntoAMontana(n, indice) : null;
 
   let pos: Coord;
   let direccion: Coord;
-  switch (lado) {
-    case 'arriba':
-      pos = { x: aleatorioEntero(0, n - 1), y: 0 };
-      direccion = { x: 0, y: 1 };
-      break;
-    case 'abajo':
-      pos = { x: aleatorioEntero(0, n - 1), y: n - 1 };
-      direccion = { x: 0, y: -1 };
-      break;
-    case 'izquierda':
-      pos = { x: 0, y: aleatorioEntero(0, n - 1) };
-      direccion = { x: 1, y: 0 };
-      break;
-    default:
-      pos = { x: n - 1, y: aleatorioEntero(0, n - 1) };
-      direccion = { x: -1, y: 0 };
+  if (inicioMontana) {
+    pos = inicioMontana.pos;
+    direccion = inicioMontana.direccion;
+  } else {
+    const lado = elegir(LADOS);
+    switch (lado) {
+      case 'arriba':
+        pos = { x: aleatorioEntero(0, n - 1), y: 0 };
+        direccion = { x: 0, y: 1 };
+        break;
+      case 'abajo':
+        pos = { x: aleatorioEntero(0, n - 1), y: n - 1 };
+        direccion = { x: 0, y: -1 };
+        break;
+      case 'izquierda':
+        pos = { x: 0, y: aleatorioEntero(0, n - 1) };
+        direccion = { x: 1, y: 0 };
+        break;
+      default:
+        pos = { x: n - 1, y: aleatorioEntero(0, n - 1) };
+        direccion = { x: -1, y: 0 };
+    }
   }
 
   const longitud = aleatorioEntero(Math.round(n * 0.5), Math.round(n * 1.0));
-  const dosCasillasDeAncho = Math.random() < 0.3;
   const perpendicular: Coord = direccion.x !== 0 ? { x: 0, y: 1 } : { x: 1, y: 0 };
+
+  const MIN_TRAMO_RECTO = 3;
+  const PROB_TRAMO_ANCHO = 0.2;
+  let pasosDesdeUltimoDesvio = 0;
+  // Antes esto era una sola decisión para TODO el río (dosCasillasDeAncho):
+  // si salía true, cada tile del recorrido completo quedaba con un vecino
+  // paralelo extra, o sea 3 vecinos cardinales en cada tile — un cruce en T
+  // ("afluente") en cada casilla del tramo entero, no una variación
+  // ocasional. Ahora se decide de nuevo en cada tramo recto (cuando
+  // pasosDesdeUltimoDesvio se reinicia), así el ensanche dura solo ese
+  // tramo (al menos MIN_TRAMO_RECTO tiles) y después vuelve a angosto.
+  let tramoActualEsAncho = Math.random() < PROB_TRAMO_ANCHO;
 
   let actual = { ...pos };
   for (let i = 0; i < longitud; i++) {
     if (!dentroDelGrid(actual, n)) break;
     marcarSiExiste(indice, actual, 'rio');
-    if (dosCasillasDeAncho) {
+    if (tramoActualEsAncho) {
       marcarSiExiste(
         indice,
         { x: actual.x + perpendicular.x, y: actual.y + perpendicular.y },
@@ -136,12 +190,27 @@ function generarRio(n: number, indice: Map<string, TileBioma>) {
     // nunca las dos cosas en el mismo paso. Así cada tile de río consecutivo
     // comparte un borde real con el anterior, que es lo que asumen las
     // piezas direccionales del autotiling (texturaRio en PantallaJuego.tsx).
-    // 70% avanza / 30% desvío lateral: mantiene el río progresando hacia el
-    // lado opuesto sin perder la curvatura.
-    const avanza = Math.random() < 0.7;
-    const delta = avanza
-      ? direccion
-      : { x: perpendicular.x * signoAleatorio(), y: perpendicular.y * signoAleatorio() };
+    //
+    // Los desvíos solo se permiten después de un mínimo de pasos rectos
+    // seguidos (MIN_TRAMO_RECTO): sin este freno, cada paso decide sin
+    // memoria del anterior y el desvío promedio cae cada ~3 tiles, casi
+    // siempre uno solo antes de volver — se ve como un "pinchazo y vuelta"
+    // constante (una esquina redondeada cada pocos tiles) en vez de tramos
+    // rectos largos con curvas ocasionales bien espaciadas.
+    const puedeDesviar = pasosDesdeUltimoDesvio >= MIN_TRAMO_RECTO;
+    const desvia = puedeDesviar && Math.random() < 0.4;
+    const delta = desvia
+      ? { x: perpendicular.x * signoAleatorio(), y: perpendicular.y * signoAleatorio() }
+      : direccion;
+    pasosDesdeUltimoDesvio = desvia ? 0 : pasosDesdeUltimoDesvio + 1;
+    // El ensanche solo se permite en el primer tramo (antes del primer
+    // giro), nunca más después: `perpendicular` es fija para todo el río,
+    // así que una fila paralela en un tramo posterior al giro puede caer
+    // sobre un carril anterior del mismo río y crear una reconexión
+    // accidental — un lazo cerrado que se ve como "dos ríos en paralelo"
+    // cuando en realidad es el mismo. Ensanchar solo antes de girar por
+    // primera vez evita ese solape por construcción.
+    if (desvia) tramoActualEsAncho = false;
     actual = { x: actual.x + delta.x, y: actual.y + delta.y };
   }
 }

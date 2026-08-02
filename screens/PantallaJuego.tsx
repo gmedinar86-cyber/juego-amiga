@@ -36,7 +36,7 @@ const MARGEN_ZOOM_ALEJADO = 1.15;
 // la perspectiva del mapa.
 const SPRITE_JUGADOR = require('../assets/personajes/maga-fuego-sprite.png');
 const SPRITE_ASPECTO = 628 / 1289; // ancho/alto del PNG original
-const SPRITE_ALTO = ALTO_TILE * 1.6;
+const SPRITE_ALTO = ALTO_TILE * 1.1;
 const SPRITE_ANCHO = SPRITE_ALTO * SPRITE_ASPECTO;
 
 // Texturas de tile del bioma desierto: bloques isométricos con paredes

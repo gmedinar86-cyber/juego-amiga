@@ -292,27 +292,66 @@ const DIAGONALES: Coord[] = [
 // dibuja entonces como dos remates "fin" sueltos, uno pegado al otro sin
 // conectar, en vez de una curva continua. Se "sana" tendiendo un puente:
 // para cada tile de río con 0-1 vecinos cardinales que tenga un vecino
-// diagonal también de río, se convierte una de las dos esquinas que
-// completarían el camino cardinal entre ambos.
+// diagonal también de río EN UNA COMPONENTE CONECTADA DISTINTA, se
+// convierte una de las dos esquinas que completarían el camino cardinal
+// entre ambos.
+//
+// El chequeo de componente distinta es clave: si las dos puntas ya están
+// conectadas por un camino cardinal más largo (mismo río, que solo
+// serpentea cerca de sí mismo), agregar un puente directo no une nada
+// nuevo — crea un atajo que se ve como una rama corta artificial pegada
+// al costado del río (confirmado visualmente: así se veía el bug antes de
+// este chequeo).
 function sanarUnionesDiagonales(indice: Map<string, TileBioma>): boolean {
   let cambio = false;
   const rioTiles = Array.from(indice.values()).filter((t) => t.tipo === 'rio');
+
+  const padre = new Map<string, string>();
+  function raiz(clave: string): string {
+    let actual = clave;
+    while (padre.get(actual) !== actual) {
+      const siguiente = padre.get(actual)!;
+      padre.set(actual, padre.get(siguiente) ?? siguiente);
+      actual = siguiente;
+    }
+    return actual;
+  }
+  function unir(a: string, b: string) {
+    const ra = raiz(a);
+    const rb = raiz(b);
+    if (ra !== rb) padre.set(ra, rb);
+  }
+  for (const t of rioTiles) padre.set(claveCoord(t), claveCoord(t));
   for (const t of rioTiles) {
+    for (const d of CARDINALES) {
+      const claveVecino = claveCoord({ x: t.x + d.x, y: t.y + d.y });
+      if (indice.get(claveVecino)?.tipo === 'rio') unir(claveCoord(t), claveVecino);
+    }
+  }
+
+  for (const t of rioTiles) {
+    const claveT = claveCoord(t);
     const vecinosCardinales = CARDINALES.filter(
       (d) => indice.get(claveCoord({ x: t.x + d.x, y: t.y + d.y }))?.tipo === 'rio'
     ).length;
     if (vecinosCardinales > 1) continue;
 
     for (const d of DIAGONALES) {
-      const vecinoDiag = indice.get(claveCoord({ x: t.x + d.x, y: t.y + d.y }));
+      const claveDiag = claveCoord({ x: t.x + d.x, y: t.y + d.y });
+      const vecinoDiag = indice.get(claveDiag);
       if (vecinoDiag?.tipo !== 'rio') continue;
+      if (raiz(claveT) === raiz(claveDiag)) continue; // ya conectados por otro camino: no es un near-miss real
 
       const esquinaA = indice.get(claveCoord({ x: t.x + d.x, y: t.y }));
       const esquinaB = indice.get(claveCoord({ x: t.x, y: t.y + d.y }));
       const candidato = [esquinaA, esquinaB].find((c) => c?.tipo === 'arena');
       if (candidato) {
+        const claveCandidato = claveCoord(candidato);
         candidato.tipo = 'rio';
         cambio = true;
+        padre.set(claveCandidato, claveCandidato);
+        unir(claveCandidato, claveT);
+        unir(claveCandidato, claveDiag);
         break;
       }
     }

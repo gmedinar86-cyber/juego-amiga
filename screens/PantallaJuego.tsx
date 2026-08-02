@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Svg, { G, Image as ImagenSvg, Path, Polygon, Polyline } from 'react-native-svg';
@@ -37,6 +37,54 @@ const SPRITE_JUGADOR = require('../assets/personajes/maga-fuego-sprite.png');
 const SPRITE_ASPECTO = 628 / 1289; // ancho/alto del PNG original
 const SPRITE_ALTO = ALTO_TILE * 1.6;
 const SPRITE_ANCHO = SPRITE_ALTO * SPRITE_ASPECTO;
+
+// Texturas de tile del bioma desierto: bloques isométricos con paredes
+// laterales (no rombos planos), fondo transparente. Se anclan por el borde
+// superior en el mismo vértice que ya usa el rombo plano (pixel.y -
+// ALTO_TILE/2) y el ancho se fija en ANCHO_TILE para que las caras
+// superiores calcen entre tiles vecinos — el alto sale de la proporción
+// real de cada PNG, así que las que tienen decoración (montaña, cactus)
+// salen más altas sin estirar la imagen.
+interface Textura {
+  fuente: number;
+  alto: number; // ya resuelto en px: ANCHO_TILE / aspectoOriginal
+}
+
+function crearTextura(fuente: number, anchoOriginal: number, altoOriginal: number): Textura {
+  return { fuente, alto: ANCHO_TILE / (anchoOriginal / altoOriginal) };
+}
+
+const TEXTURA_ARENA = crearTextura(require('../assets/tiles/sand.png'), 263, 199);
+const TEXTURA_RIO = crearTextura(require('../assets/tiles/river.png'), 265, 197);
+const TEXTURA_OASIS = crearTextura(require('../assets/tiles/oasis.png'), 263, 243);
+const TEXTURA_MONTANA = crearTextura(require('../assets/tiles/mountain.png'), 265, 243);
+const TEXTURA_ARBOL_SECO = crearTextura(require('../assets/tiles/dead-tree.png'), 263, 278);
+const TEXTURA_CACTUS = crearTextura(require('../assets/tiles/cactus.png'), 263, 312);
+
+// Variedad en 'montana': hash determinístico por coordenada del propio tile
+// (no Math.random(), para que no titile en cada render) — 60% montaña rocosa,
+// 20% árbol seco, 20% cactus, como acento disperso en vez de franjas parejas.
+function texturaMontana(tile: TileBioma): Textura {
+  const hash = Math.abs(tile.x * 928371 + tile.y * 543217) % 10;
+  if (hash < 6) return TEXTURA_MONTANA;
+  if (hash < 8) return TEXTURA_ARBOL_SECO;
+  return TEXTURA_CACTUS;
+}
+
+function texturaParaTile(tile: TileBioma): Textura | null {
+  switch (tile.tipo) {
+    case 'arena':
+      return TEXTURA_ARENA;
+    case 'rio':
+      return TEXTURA_RIO;
+    case 'oasis':
+      return TEXTURA_OASIS;
+    case 'montana':
+      return texturaMontana(tile);
+    default:
+      return null; // portal u otros tipos sin textura: sigue con colorTile
+  }
+}
 
 // Iconos de recurso/cofre en el mapa: paths copiados de los iconos
 // TreePine/Package de lucide-react-native (v1.28.0, viewBox 24x24) en vez
@@ -902,15 +950,30 @@ export default function PantallaJuego({ session }: { session: Session }) {
               const puntosPoligono = esquinasRombo(pixel.x, pixel.y, ANCHO_TILE - 3, ALTO_TILE - 3);
 
               const relleno = revelada ? colorTile(tile.tipo) : '#1B2536';
+              // Textura solo en tiles revelados — si se dibujara también en
+              // niebla, la silueta (montaña, río) se filtraría a través del
+              // fill oscuro de fog, que es una capa aparte con su propio alfa.
+              const textura = revelada ? texturaParaTile(tile) : null;
 
               return (
-                <Polygon
-                  key={clave}
-                  points={puntosPoligono}
-                  fill={relleno}
-                  stroke={sinCamino ? '#E8746A' : '#2C394D'}
-                  strokeWidth={sinCamino ? 2.5 : 1}
-                />
+                <Fragment key={clave}>
+                  <Polygon
+                    points={puntosPoligono}
+                    fill={relleno}
+                    stroke={sinCamino ? '#E8746A' : '#2C394D'}
+                    strokeWidth={sinCamino ? 2.5 : 1}
+                  />
+                  {textura && (
+                    <ImagenSvg
+                      href={textura.fuente}
+                      x={pixel.x - ANCHO_TILE / 2}
+                      y={pixel.y - ALTO_TILE / 2}
+                      width={ANCHO_TILE}
+                      height={textura.alto}
+                      preserveAspectRatio="xMidYMid meet"
+                    />
+                  )}
+                </Fragment>
               );
             })}
 

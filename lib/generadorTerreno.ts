@@ -76,12 +76,33 @@ function generarIntento(n: number, spawn: Coord, portal: Coord): TileBioma[] {
     tile.recurso = 'lana';
   });
 
+  // Cofres escondidos: lejos del spawn (más que árboles/piedra/lana, así
+  // hace falta explorar para encontrarlos), con loot de material al azar.
+  // El generador no tiene acceso a la DB, así que no puede resolver un
+  // objetoId real acá — deja el *nombre* del objeto en `cofrePendiente` y
+  // un SQL aparte lo resuelve a `cofre` (ver tipos.ts).
+  esparcirCofres(indice, spawn, portal);
+
   return tiles;
 }
 
 const RADIO_SEGURO_SPAWN = 1;
+const RADIO_ESCONDIDO_COFRE = 4;
 const PROB_ARBOL = 0.035;
 const PROB_RECURSO = 0.02;
+const PROB_COFRE = 0.012;
+const LOOT_COFRE_ESCONDIDO = ['Madera', 'Piedra', 'Lana'] as const;
+
+function esparcirCofres(indice: Map<string, TileBioma>, spawn: Coord, portal: Coord) {
+  for (const tile of indice.values()) {
+    if (tile.tipo !== 'arena' || tile.recurso || tile.cofre) continue;
+    if (distanciaChebyshev(tile, spawn) <= RADIO_ESCONDIDO_COFRE) continue;
+    if (distanciaChebyshev(tile, portal) <= RADIO_SEGURO_SPAWN) continue;
+    if (Math.random() < PROB_COFRE) {
+      tile.cofrePendiente = elegir(LOOT_COFRE_ESCONDIDO);
+    }
+  }
+}
 
 function esparcirElementos(
   indice: Map<string, TileBioma>,

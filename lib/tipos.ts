@@ -9,6 +9,12 @@ export interface TileBioma extends Coord {
   tipo: string;
   recurso: string | null;
   cofre?: CofreTile | null;
+  // Marcador temporal del generador (ver esparcirCofres en
+  // generadorTerreno.ts): el generador no tiene acceso a la DB, así que no
+  // puede resolver un objetoId real. Guarda el *nombre* del objeto y un SQL
+  // aparte lo resuelve a `cofre` (con el objetoId real) antes de guardarse
+  // en Supabase — el cliente nunca debería ver este campo en producción.
+  cofrePendiente?: string | null;
 }
 
 export interface GridBioma {

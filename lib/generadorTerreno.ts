@@ -110,19 +110,35 @@ function colocarRocaClase(n: number, indice: Map<string, TileBioma>, spawn: Coor
     }
   }
 
-  let mejor: TileBioma | null = null;
-  let mejorDistancia = -1;
-  for (const [clave, distancia] of distancias) {
-    if (clave === claveCoord(portal)) continue;
-    const tile = indice.get(clave)!;
-    if (tile.tipo !== 'arena' || tile.recurso || tile.cofre || tile.cofrePendiente) continue;
-    if (distancia > mejorDistancia) {
-      mejorDistancia = distancia;
-      mejor = tile;
+  // La roca queda lejos del spawn, pero NO puede terminar pegada al portal:
+  // ese es el punto más lejano del spawn con más frecuencia (spawn y portal
+  // están en esquinas opuestas), y ahí más adelante va un boss final —
+  // necesita su propio espacio, sin la roca de por medio. Se descartan los
+  // candidatos dentro de RADIO_RESERVADO_PORTAL antes de elegir el más
+  // lejano del spawn entre los que queden; si ningún candidato sobrevive
+  // ese filtro (mapas muy chicos), se repite sin el filtro para garantizar
+  // que la roca siempre se coloque en algún lado.
+  const elegirMejor = (respetarReservaPortal: boolean): TileBioma | null => {
+    let mejor: TileBioma | null = null;
+    let mejorDistancia = -1;
+    for (const [clave, distancia] of distancias) {
+      const tile = indice.get(clave)!;
+      if (respetarReservaPortal && distanciaChebyshev(tile, portal) <= RADIO_RESERVADO_PORTAL) continue;
+      if (!respetarReservaPortal && clave === claveCoord(portal)) continue;
+      if (tile.tipo !== 'arena' || tile.recurso || tile.cofre || tile.cofrePendiente) continue;
+      if (distancia > mejorDistancia) {
+        mejorDistancia = distancia;
+        mejor = tile;
+      }
     }
-  }
+    return mejor;
+  };
+
+  const mejor = elegirMejor(true) ?? elegirMejor(false);
   if (mejor) mejor.tipo = 'roca_clase';
 }
+
+const RADIO_RESERVADO_PORTAL = 6;
 
 const RADIO_SEGURO_SPAWN = 1;
 const RADIO_ESCONDIDO_COFRE = 4;

@@ -131,19 +131,18 @@ function generarRio(n: number, indice: Map<string, TileBioma>) {
       );
     }
 
-    const ruido = aleatorioEntero(-1, 1);
-    const deltaX = direccion.x + (direccion.x === 0 ? ruido : 0);
-    const deltaY = direccion.y + (direccion.y === 0 ? ruido : 0);
-    const siguiente = { x: actual.x + deltaX, y: actual.y + deltaY };
-
-    // Si el paso es diagonal, con movimiento de 8 direcciones el jugador podría
-    // colarse por la muesca entre "actual" y "siguiente" sin pisar el río.
-    // Sellamos la celda esquina para que el río siga siendo una barrera real.
-    if (deltaX !== 0 && deltaY !== 0) {
-      marcarSiExiste(indice, { x: siguiente.x, y: actual.y }, 'rio');
-    }
-
-    actual = siguiente;
+    // Paso siempre cardinal, nunca diagonal: en cada iteración, o bien
+    // avanza en la dirección principal, o bien se desvía lateralmente —
+    // nunca las dos cosas en el mismo paso. Así cada tile de río consecutivo
+    // comparte un borde real con el anterior, que es lo que asumen las
+    // piezas direccionales del autotiling (texturaRio en PantallaJuego.tsx).
+    // 70% avanza / 30% desvío lateral: mantiene el río progresando hacia el
+    // lado opuesto sin perder la curvatura.
+    const avanza = Math.random() < 0.7;
+    const delta = avanza
+      ? direccion
+      : { x: perpendicular.x * signoAleatorio(), y: perpendicular.y * signoAleatorio() };
+    actual = { x: actual.x + delta.x, y: actual.y + delta.y };
   }
 }
 
@@ -232,6 +231,10 @@ function tallarCaminoMinimo(
 
 function aleatorioEntero(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function signoAleatorio(): 1 | -1 {
+  return Math.random() < 0.5 ? 1 : -1;
 }
 
 function elegir<T>(opciones: readonly T[]): T {

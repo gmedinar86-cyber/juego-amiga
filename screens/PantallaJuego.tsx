@@ -49,6 +49,13 @@ const SPRITE_ANCHO = SPRITE_ALTO * SPRITE_ASPECTO;
 interface Textura {
   fuente: number;
   alto: number; // ya resuelto en px: ANCHO_TILE / aspectoOriginal
+  // Transform SVG adicional aplicado después de translate(pixel.x,pixel.y)
+  // — solo lo usan las piezas de río autotileadas (espejado/rotación).
+  transform?: string;
+  // Si es true, la Image se ancla centrada en el tile en vez de por el
+  // borde superior (excepción para las piezas de esquina rotadas — ver
+  // orientarEsquina).
+  centrado?: boolean;
 }
 
 function crearTextura(fuente: number, anchoOriginal: number, altoOriginal: number): Textura {
@@ -56,9 +63,9 @@ function crearTextura(fuente: number, anchoOriginal: number, altoOriginal: numbe
 }
 
 const TEXTURA_ARENA = crearTextura(require('../assets/tiles/sand.png'), 263, 199);
-// river.png queda sin usar por ahora (el agua se dibuja por código, ver
-// rioGeometria más abajo) — el archivo se deja en el repo por si sirve para
-// otra cosa más adelante (ej. un ícono de "necesitás cantimplora").
+// river.png (el tile de río plano original) queda sin usar — reemplazado
+// por el sistema de autotiling de abajo. El archivo se deja en el repo por
+// si sirve para otra cosa más adelante.
 const TEXTURA_OASIS = crearTextura(require('../assets/tiles/oasis.png'), 263, 243);
 const TEXTURA_MONTANA = crearTextura(require('../assets/tiles/mountain.png'), 265, 243);
 const TEXTURA_ARBOL_SECO = crearTextura(require('../assets/tiles/dead-tree.png'), 263, 278);
@@ -74,11 +81,173 @@ function texturaMontana(tile: TileBioma): Textura {
   return TEXTURA_CACTUS;
 }
 
-function texturaParaTile(tile: TileBioma): Textura | null {
+// --- Río: autotiling con piezas direccionales ---
+//
+// Solo se consideran los 4 vecinos CARDINALES de grid (no los 4 diagonales):
+// un paso cardinal (ej. (1,0)) comparte un borde completo del rombo con el
+// vecino; un paso diagonal solo toca un vértice, sin borde que "cruce". El
+// generador de terreno además sella la celda esquina cada vez que el río da
+// un paso diagonal (ver generarRio), así que en la práctica los ríos
+// generados quedan conectados por bordes cardinales de todas formas.
+type Borde = 'NE' | 'SE' | 'SW' | 'NW';
+
+const BORDE_DELTA: Record<Borde, Coord> = {
+  NE: { x: 0, y: -1 },
+  SE: { x: 1, y: 0 },
+  SW: { x: 0, y: 1 },
+  NW: { x: -1, y: 0 },
+};
+
+// Signo en pantalla de cada borde (a partir de isoAPixel del delta) — deja
+// resolver espejados comparando signos en vez de razonar en coordenadas de
+// grid, que no están alineadas con los ejes de pantalla en esta proyección.
+const BORDE_SIGNO: Record<Borde, { sx: 1 | -1; sy: 1 | -1 }> = {
+  NE: { sx: 1, sy: -1 },
+  SE: { sx: 1, sy: 1 },
+  SW: { sx: -1, sy: 1 },
+  NW: { sx: -1, sy: -1 },
+};
+
+function sonOpuestos(a: Borde, b: Borde): boolean {
+  return (a === 'NE' && b === 'SW') || (a === 'SW' && b === 'NE') || (a === 'NW' && b === 'SE') || (a === 'SE' && b === 'NW');
+}
+
+type Vertice = 'ARRIBA' | 'DERECHA' | 'ABAJO' | 'IZQUIERDA';
+
+const VERTICE_BORDES: Record<Vertice, [Borde, Borde]> = {
+  ARRIBA: ['NE', 'NW'],
+  DERECHA: ['NE', 'SE'],
+  ABAJO: ['SE', 'SW'],
+  IZQUIERDA: ['SW', 'NW'],
+};
+
+// Dirección de cada vértice en pantalla — ARRIBA/ABAJO son "familia
+// vertical" (x=0), DERECHA/IZQUIERDA son "familia horizontal" (y=0). Pasar
+// de una familia a la otra es lo único que no se puede resolver con
+// espejado en un rombo 2:1 (ver orientarEsquina).
+const VERTICE_DIRECCION: Record<Vertice, { x: number; y: number }> = {
+  ARRIBA: { x: 0, y: -1 },
+  DERECHA: { x: 1, y: 0 },
+  ABAJO: { x: 0, y: 1 },
+  IZQUIERDA: { x: -1, y: 0 },
+};
+
+const ORDEN_VERTICES: Vertice[] = ['ARRIBA', 'DERECHA', 'ABAJO', 'IZQUIERDA'];
+
+function verticeDesdeBordes(a: Borde, b: Borde): Vertice {
+  const entrada = (Object.entries(VERTICE_BORDES) as [Vertice, [Borde, Borde]][]).find(
+    ([, bordes]) => bordes.includes(a) && bordes.includes(b)
+  );
+  return entrada![0];
+}
+
+const TEXTURA_RIO_RECTO_NESW = crearTextura(require('../assets/tiles/recto-nesw.png'), 226, 168);
+const TEXTURA_RIO_RECTO_NWSE = crearTextura(require('../assets/tiles/recto-nwse.png'), 226, 168);
+const TEXTURA_RIO_ESQUINA = crearTextura(require('../assets/tiles/esquina.png'), 226, 166);
+const TEXTURA_RIO_CONFLUENCIA = crearTextura(require('../assets/tiles/confluencia-4.png'), 226, 168);
+const TEXTURA_RIO_ANCHO = crearTextura(require('../assets/tiles/ancho.png'), 226, 167);
+const TEXTURA_RIO_FIN = crearTextura(require('../assets/tiles/fin.png'), 238, 206);
+
+// Orientación asumida de cada pieza tal como está dibujada — lectura visual
+// aproximada. Si alguna pieza sale rotada/espejada al revés en el
+// dispositivo, ajustar estos 3 valores (única fuente de verdad de la
+// orientación base, no hace falta tocar la lógica de abajo).
+const FIN_BASE: Borde = 'NE';
+const ANCHO_BASE_CERRADO: Borde = 'NW'; // el único borde sin agua en ancho.png
+const ESQUINA_BASE_VERTICE: Vertice = 'ABAJO';
+
+// Aplica un espejado "en el lugar" (preserva el anclaje por borde superior)
+// — si no hace falta espejar, no agrega transform.
+function piezaPlano(base: Textura, escalaX: 1 | -1 = 1, escalaY: 1 | -1 = 1): Textura {
+  if (escalaX === 1 && escalaY === 1) return { fuente: base.fuente, alto: base.alto };
+  const centroY = -ALTO_TILE / 2 + base.alto / 2;
+  return {
+    fuente: base.fuente,
+    alto: base.alto,
+    transform: `translate(0,${centroY}) scale(${escalaX},${escalaY}) translate(0,${-centroY})`,
+  };
+}
+
+// Rotación de 90°/-90° + escala compensatoria para que la huella final
+// siga midiendo ANCHO_TILE x alto — aproximación aceptada (distorsiona la
+// pieza) para las 2 de las 4 orientaciones de esquina que un espejado no
+// puede alcanzar en un rombo 2:1. Se ancla centrada en el tile en vez de
+// por el borde superior.
+function piezaRotada(base: Textura, angulo: 90 | -90): Textura {
+  const escalaCompX = base.alto / ANCHO_TILE;
+  const escalaCompY = ANCHO_TILE / base.alto;
+  return {
+    fuente: base.fuente,
+    alto: base.alto,
+    transform: `rotate(${angulo}) scale(${escalaCompX},${escalaCompY})`,
+    centrado: true,
+  };
+}
+
+function orientarFin(objetivo: Borde): Textura {
+  const base = BORDE_SIGNO[FIN_BASE];
+  const obj = BORDE_SIGNO[objetivo];
+  return piezaPlano(TEXTURA_RIO_FIN, (obj.sx * base.sx) as 1 | -1, (obj.sy * base.sy) as 1 | -1);
+}
+
+function orientarAncho(bordeCerrado: Borde): Textura {
+  const base = BORDE_SIGNO[ANCHO_BASE_CERRADO];
+  const obj = BORDE_SIGNO[bordeCerrado];
+  return piezaPlano(TEXTURA_RIO_ANCHO, (obj.sx * base.sx) as 1 | -1, (obj.sy * base.sy) as 1 | -1);
+}
+
+function orientarEsquina(objetivo: Vertice): Textura {
+  if (objetivo === ESQUINA_BASE_VERTICE) return piezaPlano(TEXTURA_RIO_ESQUINA);
+
+  const idxBase = ORDEN_VERTICES.indexOf(ESQUINA_BASE_VERTICE);
+  const idxObjetivo = ORDEN_VERTICES.indexOf(objetivo);
+  const diff = (idxObjetivo - idxBase + 4) % 4;
+
+  if (diff === 2) {
+    // Misma familia (arriba<->abajo o izquierda<->derecha): espejado exacto.
+    const base = VERTICE_DIRECCION[ESQUINA_BASE_VERTICE];
+    const obj = VERTICE_DIRECCION[objetivo];
+    const escalaX = base.x === 0 ? 1 : ((obj.x * base.x) as 1 | -1);
+    const escalaY = base.y === 0 ? 1 : ((obj.y * base.y) as 1 | -1);
+    return piezaPlano(TEXTURA_RIO_ESQUINA, escalaX, escalaY);
+  }
+
+  // diff 1 o 3: familias distintas — necesita la rotación aproximada.
+  return piezaRotada(TEXTURA_RIO_ESQUINA, diff === 1 ? 90 : -90);
+}
+
+function texturaRio(tile: TileBioma, tilesPorClave: Map<string, TileBioma>): Textura {
+  const conectados = (Object.keys(BORDE_DELTA) as Borde[]).filter((borde) => {
+    const d = BORDE_DELTA[borde];
+    return tilesPorClave.get(claveCoord({ x: tile.x + d.x, y: tile.y + d.y }))?.tipo === 'rio';
+  });
+
+  if (conectados.length === 0) return orientarFin(FIN_BASE); // aislado: no hay vecino que oriente la pieza
+  if (conectados.length === 1) return orientarFin(conectados[0]);
+
+  if (conectados.length === 2) {
+    const [a, b] = conectados;
+    if (sonOpuestos(a, b)) {
+      const ejeY = a === 'NE' || a === 'SW';
+      return piezaPlano(ejeY ? TEXTURA_RIO_RECTO_NESW : TEXTURA_RIO_RECTO_NWSE);
+    }
+    return orientarEsquina(verticeDesdeBordes(a, b));
+  }
+
+  if (conectados.length === 3) {
+    const faltante = (Object.keys(BORDE_DELTA) as Borde[]).find((b) => !conectados.includes(b))!;
+    return orientarAncho(faltante);
+  }
+
+  return piezaPlano(TEXTURA_RIO_CONFLUENCIA);
+}
+
+function texturaParaTile(tile: TileBioma, tilesPorClave: Map<string, TileBioma>): Textura | null {
   switch (tile.tipo) {
     case 'arena':
-    case 'rio': // el agua se dibuja aparte, encima (rioGeometria) — la base sigue siendo arena
       return TEXTURA_ARENA;
+    case 'rio':
+      return texturaRio(tile, tilesPorClave);
     case 'oasis':
       return TEXTURA_OASIS;
     case 'montana':
@@ -966,9 +1135,11 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const herramientaFaltante =
     tileActual?.recurso && !recursoHabilitado ? herramientaParaRecurso(catalogoObjetos, tileActual.recurso) : undefined;
 
-  const tileRevelado = (t: TileBioma) => DEBUG_SIN_FOG || descubiertas.has(claveCoord(t));
-  const juntasRioVisibles = rioGeometria.juntas.filter((j) => tileRevelado(j.tile));
-  const tramosRioVisibles = rioGeometria.tramos.filter((t) => tileRevelado(t.a.tile) && tileRevelado(t.b.tile));
+  // Río revertido a relleno plano — ver comentario en el render del Svg más
+  // abajo. Se dejan sin usar (no se borran) como referencia para retomar.
+  // const tileRevelado = (t: TileBioma) => DEBUG_SIN_FOG || descubiertas.has(claveCoord(t));
+  // const juntasRioVisibles = rioGeometria.juntas.filter((j) => tileRevelado(j.tile));
+  // const tramosRioVisibles = rioGeometria.tramos.filter((t) => tileRevelado(t.a.tile) && tileRevelado(t.b.tile));
 
   return (
     <View style={styles.contenedor}>
@@ -1036,7 +1207,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
               // Textura solo en tiles revelados — si se dibujara también en
               // niebla, la silueta (montaña, río) se filtraría a través del
               // fill oscuro de fog, que es una capa aparte con su propio alfa.
-              const textura = revelada ? texturaParaTile(tile) : null;
+              const textura = revelada ? texturaParaTile(tile, tilesPorClave) : null;
 
               return (
                 <Fragment key={clave}>
@@ -1047,55 +1218,60 @@ export default function PantallaJuego({ session }: { session: Session }) {
                     strokeWidth={sinCamino ? 2.5 : 1}
                   />
                   {textura && (
-                    <ImagenSvg
-                      href={textura.fuente}
-                      x={pixel.x - ANCHO_TILE / 2}
-                      y={pixel.y - ALTO_TILE / 2}
-                      width={ANCHO_TILE}
-                      height={textura.alto}
-                      preserveAspectRatio="xMidYMid meet"
-                    />
+                    <G transform={`translate(${pixel.x},${pixel.y}) ${textura.transform ?? ''}`}>
+                      <ImagenSvg
+                        href={textura.fuente}
+                        x={-ANCHO_TILE / 2}
+                        y={textura.centrado ? -textura.alto / 2 : -ALTO_TILE / 2}
+                        width={ANCHO_TILE}
+                        height={textura.alto}
+                        preserveAspectRatio="xMidYMid meet"
+                      />
+                    </G>
                   )}
                 </Fragment>
               );
             })}
 
-            {/* Río: cauce continuo calculado (juntas + tramos), no imagen por
-                tile. Borde oscuro primero (más ancho) y agua encima (ancho
-                real) — el borde asomando alrededor da la sensación de cauce
-                hundido en la arena. */}
-            {juntasRioVisibles.map((j) => (
-              <Circle
-                key={`rio-borde-j-${claveCoord(j.tile)}`}
-                cx={j.pixel.x}
-                cy={j.pixel.y}
-                r={(j.ancho + RIO_BORDE_EXTRA) / 2}
-                fill={COLOR_RIO_BORDE}
-              />
-            ))}
-            {tramosRioVisibles.map((t) => (
-              <Polygon
-                key={`rio-borde-t-${[claveCoord(t.a.tile), claveCoord(t.b.tile)].sort().join('_')}`}
-                points={franjaAgua(t.a.pixel, t.b.pixel, t.ancho + RIO_BORDE_EXTRA)}
-                fill={COLOR_RIO_BORDE}
-              />
-            ))}
-            {juntasRioVisibles.map((j) => (
-              <Circle
-                key={`rio-agua-j-${claveCoord(j.tile)}`}
-                cx={j.pixel.x}
-                cy={j.pixel.y}
-                r={j.ancho / 2}
-                fill={COLOR_RIO_AGUA}
-              />
-            ))}
-            {tramosRioVisibles.map((t) => (
-              <Polygon
-                key={`rio-agua-t-${[claveCoord(t.a.tile), claveCoord(t.b.tile)].sort().join('_')}`}
-                points={franjaAgua(t.a.pixel, t.b.pixel, t.ancho)}
-                fill={COLOR_RIO_AGUA}
-              />
-            ))}
+            {/*
+              Río revertido a relleno plano (colorTile) mientras se prepara
+              arte direccional nuevo — la cinta calculada (juntas + tramos,
+              con borde oscuro + agua encima) no se veía bien. Se deja
+              comentada, sin borrar, como referencia para retomarla:
+
+              {juntasRioVisibles.map((j) => (
+                <Circle
+                  key={`rio-borde-j-${claveCoord(j.tile)}`}
+                  cx={j.pixel.x}
+                  cy={j.pixel.y}
+                  r={(j.ancho + RIO_BORDE_EXTRA) / 2}
+                  fill={COLOR_RIO_BORDE}
+                />
+              ))}
+              {tramosRioVisibles.map((t) => (
+                <Polygon
+                  key={`rio-borde-t-${[claveCoord(t.a.tile), claveCoord(t.b.tile)].sort().join('_')}`}
+                  points={franjaAgua(t.a.pixel, t.b.pixel, t.ancho + RIO_BORDE_EXTRA)}
+                  fill={COLOR_RIO_BORDE}
+                />
+              ))}
+              {juntasRioVisibles.map((j) => (
+                <Circle
+                  key={`rio-agua-j-${claveCoord(j.tile)}`}
+                  cx={j.pixel.x}
+                  cy={j.pixel.y}
+                  r={j.ancho / 2}
+                  fill={COLOR_RIO_AGUA}
+                />
+              ))}
+              {tramosRioVisibles.map((t) => (
+                <Polygon
+                  key={`rio-agua-t-${[claveCoord(t.a.tile), claveCoord(t.b.tile)].sort().join('_')}`}
+                  points={franjaAgua(t.a.pixel, t.b.pixel, t.ancho)}
+                  fill={COLOR_RIO_AGUA}
+                />
+              ))}
+            */}
 
             {geometria.puntos
               .filter(

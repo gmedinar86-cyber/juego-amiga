@@ -87,6 +87,19 @@ const TEXTURA_MONTANA = conAlturaExtra(crearTextura(require('../assets/tiles/mou
 const TEXTURA_ARBOL_SECO = conAlturaExtra(crearTextura(require('../assets/tiles/dead-tree.png'), 263, 278));
 const TEXTURA_CACTUS = conAlturaExtra(crearTextura(require('../assets/tiles/cactus.png'), 263, 312));
 
+// Roca de cambio de rol: a diferencia de las texturas de arriba, esta
+// ilustración no dibuja una base de arena para calzar contra TEXTURA_ARENA
+// (es una roca "suelta" con su propio pedregal en la base, sin la caja de
+// paredes que sí tienen sand/mountain/dead-tree). Se ancla distinto:
+// directamente por el vértice INFERIOR del rombo (el pedregal apoya ahí),
+// no por el superior — conAlturaExtra asume una base compartida que esta
+// pieza no tiene.
+function conBaseEnVertice(base: Textura): Textura {
+  const extra = base.alto - ALTO_TILE;
+  return { ...base, transform: `translate(0,${-extra})` };
+}
+const TEXTURA_ROCA_CLASE = conBaseEnVertice(crearTextura(require('../assets/entorno/roca-cambio-rol.png'), 1209, 1481));
+
 // Variedad en 'montana': hash determinístico por coordenada del propio tile
 // (no Math.random(), para que no titile en cada render) — 60% montaña rocosa,
 // 20% árbol seco, 20% cactus, como acento disperso en vez de franjas parejas.
@@ -277,9 +290,7 @@ function texturaParaTile(
       // piedra/lana cuando se juntan (ver el filtro de íconos más abajo).
       return recolectado ? TEXTURA_ARENA : TEXTURA_ARBOL_SECO;
     case 'roca_clase':
-      // Sin arte propio todavía (ver ICONO_ROCA_CLASE) — la base queda como
-      // arena plana y el ícono grande encima es lo que la distingue.
-      return TEXTURA_ARENA;
+      return TEXTURA_ROCA_CLASE;
     default:
       return null; // portal u otros tipos sin textura: sigue con colorTile
   }
@@ -363,22 +374,6 @@ const ICONOS_RECURSO: Record<string, { segmentos: SegmentoIcono[]; color: string
   lana: { segmentos: ICONO_OVEJA, color: '#F2F2F2' },
 };
 
-// Placeholder (sin arte propio todavía — ver assets/entorno/roca-cambio-rol.png,
-// que llegó como referencia pero no está recortada para encajar como tile
-// isométrico) para la roca de cambio de rol: un solo landmark por bioma,
-// path del ícono lucide "Landmark", en violeta para distinguirla de
-// cualquier otro ícono del mapa (nada más comparte ese color).
-const ICONO_ROCA_CLASE: SegmentoIcono[] = [
-  { tipo: 'path', d: 'M3 22h18' },
-  { tipo: 'path', d: 'M6 18v-9' },
-  { tipo: 'path', d: 'M10 18v-9' },
-  { tipo: 'path', d: 'M14 18v-9' },
-  { tipo: 'path', d: 'M18 18v-9' },
-  { tipo: 'path', d: 'M2 9l10-6 10 6' },
-];
-const COLOR_ROCA_CLASE = '#A855F7';
-const TAMANO_ICONO_ROCA_CLASE = ALTO_TILE * 1.15;
-
 const ICONO_COFRE: SegmentoIcono[] = [
   {
     tipo: 'path',
@@ -389,22 +384,10 @@ const ICONO_COFRE: SegmentoIcono[] = [
   { tipo: 'path', d: 'm7.5 4.27 9 5.15' },
 ];
 
-function IconoMapa({
-  segmentos,
-  x,
-  y,
-  color,
-  tamano = ICONO_TAMANO,
-}: {
-  segmentos: SegmentoIcono[];
-  x: number;
-  y: number;
-  color: string;
-  tamano?: number;
-}) {
-  const escala = tamano / ICONO_VIEWBOX;
+function IconoMapa({ segmentos, x, y, color }: { segmentos: SegmentoIcono[]; x: number; y: number; color: string }) {
+  const escala = ICONO_TAMANO / ICONO_VIEWBOX;
   return (
-    <G transform={`translate(${x - tamano / 2}, ${y - tamano / 2}) scale(${escala})`}>
+    <G transform={`translate(${x - ICONO_TAMANO / 2}, ${y - ICONO_TAMANO / 2}) scale(${escala})`}>
       {segmentos.map((s, i) =>
         s.tipo === 'path' ? (
           <Path key={i} d={s.d} stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" fill="none" />
@@ -1400,19 +1383,6 @@ export default function PantallaJuego({ session }: { session: Session }) {
                   x={pixel.x}
                   y={pixel.y}
                   color="#D4A017"
-                />
-              ))}
-
-            {geometria.puntos
-              .filter(({ tile }) => (DEBUG_SIN_FOG || descubiertas.has(claveCoord(tile))) && tile.tipo === 'roca_clase')
-              .map(({ tile, pixel }) => (
-                <IconoMapa
-                  key={`roca-clase-${claveCoord(tile)}`}
-                  segmentos={ICONO_ROCA_CLASE}
-                  x={pixel.x}
-                  y={pixel.y}
-                  color={COLOR_ROCA_CLASE}
-                  tamano={TAMANO_ICONO_ROCA_CLASE}
                 />
               ))}
 

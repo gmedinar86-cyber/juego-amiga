@@ -83,7 +83,45 @@ function generarIntento(n: number, spawn: Coord, portal: Coord): TileBioma[] {
   // un SQL aparte lo resuelve a `cofre` (ver tipos.ts).
   esparcirCofres(indice, spawn, portal);
 
+  // Roca de cambio de rol: una por bioma, "de no fácil acceso" — se coloca
+  // en la casilla transitable más lejana del spawn (por pasos reales, no
+  // en línea recta, así que cuenta rodear montañas/río) que además sea
+  // efectivamente alcanzable. Solo el punto en el mapa por ahora, sin
+  // función todavía (eso se define más adelante).
+  colocarRocaClase(n, indice, spawn, portal);
+
   return tiles;
+}
+
+function colocarRocaClase(n: number, indice: Map<string, TileBioma>, spawn: Coord, portal: Coord) {
+  const distancias = new Map<string, number>([[claveCoord(spawn), 0]]);
+  const cola: Coord[] = [spawn];
+  while (cola.length > 0) {
+    const actual = cola.shift()!;
+    const dActual = distancias.get(claveCoord(actual))!;
+    for (const vecino of vecinos(actual)) {
+      if (!dentroDelGrid(vecino, n)) continue;
+      const clave = claveCoord(vecino);
+      if (distancias.has(clave)) continue;
+      const tile = indice.get(clave);
+      if (!tile || !esTransitable(tile)) continue;
+      distancias.set(clave, dActual + 1);
+      cola.push(vecino);
+    }
+  }
+
+  let mejor: TileBioma | null = null;
+  let mejorDistancia = -1;
+  for (const [clave, distancia] of distancias) {
+    if (clave === claveCoord(portal)) continue;
+    const tile = indice.get(clave)!;
+    if (tile.tipo !== 'arena' || tile.recurso || tile.cofre || tile.cofrePendiente) continue;
+    if (distancia > mejorDistancia) {
+      mejorDistancia = distancia;
+      mejor = tile;
+    }
+  }
+  if (mejor) mejor.tipo = 'roca_clase';
 }
 
 const RADIO_SEGURO_SPAWN = 1;

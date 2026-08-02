@@ -49,6 +49,11 @@ const SPRITE_ANCHO = SPRITE_ALTO * SPRITE_ASPECTO;
 interface Textura {
   fuente: number;
   alto: number; // ya resuelto en px: ANCHO_TILE / aspectoOriginal
+  // Ancho ya resuelto en px — por defecto ANCHO_TILE (así calzan las caras
+  // superiores entre tiles vecinos). Solo se pisa cuando el PNG no comparte
+  // proporciones con el resto de su set (ver TEXTURA_RIO_FIN) y hace falta
+  // escalarlo distinto para que el contenido real quede del mismo tamaño.
+  ancho?: number;
   // Transform SVG adicional aplicado después de translate(pixel.x,pixel.y)
   // — solo lo usan las piezas de río autotileadas (espejado/rotación).
   transform?: string;
@@ -195,7 +200,25 @@ const TEXTURA_RIO_RECTO_NWSE = crearTextura(require('../assets/tiles/recto-nwse.
 const TEXTURA_RIO_ESQUINA = crearTextura(require('../assets/tiles/esquina.png'), 226, 166);
 const TEXTURA_RIO_CONFLUENCIA = crearTextura(require('../assets/tiles/confluencia-4.png'), 226, 168);
 const TEXTURA_RIO_ANCHO = crearTextura(require('../assets/tiles/ancho.png'), 226, 167);
-const TEXTURA_RIO_FIN = crearTextura(require('../assets/tiles/fin.png'), 238, 206);
+
+// fin.png no comparte el canvas de sus hermanas (226px de ancho real) — mide
+// 238px de ancho. El contenido dibujado (el pool de agua en sí) ocupa el
+// mismo tamaño en píxeles crudos que en recto/esquina/ancho/confluencia
+// (~210x151, verificado recortando por canal alfa), solo que centrado en un
+// canvas más grande. crearTextura fuerza el ancho renderizado a ANCHO_TILE
+// SIEMPRE, así que tratar a fin.png igual que a sus hermanas la escala con
+// un factor distinto (72/238 en vez de 72/226) y el agua sale más chica y
+// desalineada respecto a las piezas vecinas con las que tiene que calzar.
+// Se usa acá la MISMA escala que las hermanas (basada en su ancho real,
+// 226) en vez de forzar ANCHO_TILE, para que el contenido quede del mismo
+// tamaño en pantalla — el ancho final renderizado da ~75px, no 72, y es
+// intencional.
+const ESCALA_RIO = ANCHO_TILE / 226;
+const TEXTURA_RIO_FIN: Textura = {
+  fuente: require('../assets/tiles/fin.png'),
+  ancho: 238 * ESCALA_RIO,
+  alto: 206 * ESCALA_RIO,
+};
 
 // Orientación asumida de cada pieza tal como está dibujada — lectura visual
 // aproximada. Si alguna pieza sale rotada/espejada al revés en el
@@ -208,11 +231,12 @@ const ESQUINA_BASE_VERTICE: Vertice = 'ABAJO';
 // Aplica un espejado "en el lugar" (preserva el anclaje por borde superior)
 // — si no hace falta espejar, no agrega transform.
 function piezaPlano(base: Textura, escalaX: 1 | -1 = 1, escalaY: 1 | -1 = 1): Textura {
-  if (escalaX === 1 && escalaY === 1) return { fuente: base.fuente, alto: base.alto };
+  if (escalaX === 1 && escalaY === 1) return { fuente: base.fuente, alto: base.alto, ancho: base.ancho };
   const centroY = -ALTO_TILE / 2 + base.alto / 2;
   return {
     fuente: base.fuente,
     alto: base.alto,
+    ancho: base.ancho,
     transform: `translate(0,${centroY}) scale(${escalaX},${escalaY}) translate(0,${-centroY})`,
   };
 }
@@ -1312,9 +1336,9 @@ export default function PantallaJuego({ session }: { session: Session }) {
                     <G transform={`translate(${pixel.x},${pixel.y}) ${textura.transform ?? ''}`}>
                       <ImagenSvg
                         href={textura.fuente}
-                        x={-ANCHO_TILE / 2}
+                        x={-(textura.ancho ?? ANCHO_TILE) / 2}
                         y={textura.centrado ? -textura.alto / 2 : -ALTO_TILE / 2}
-                        width={ANCHO_TILE}
+                        width={textura.ancho ?? ANCHO_TILE}
                         height={textura.alto}
                         preserveAspectRatio="xMidYMid meet"
                       />

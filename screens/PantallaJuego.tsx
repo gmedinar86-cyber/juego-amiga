@@ -63,13 +63,29 @@ function crearTextura(fuente: number, anchoOriginal: number, altoOriginal: numbe
 }
 
 const TEXTURA_ARENA = crearTextura(require('../assets/tiles/sand.png'), 263, 199);
+
+// Texturas más altas que TEXTURA_ARENA (montaña, árbol, cactus, oasis) son
+// el mismo bloque de arena de base con algo dibujado ENCIMA (ver los PNG:
+// la base del bloque queda idéntica, la decoración crece hacia arriba). El
+// anclaje por borde superior de arriba asume que todas miden lo mismo que
+// TEXTURA_ARENA, así que sin corrección la altura de más se agrega hacia
+// ABAJO en vez de hacia arriba — el bloque completo se ve hundido en vez de
+// que la decoración sobresalga. Se corrige desplazando la imagen hacia
+// arriba exactamente esa diferencia, para que la base quede alineada con
+// las casillas vecinas y solo la decoración sobresalga.
+function conAlturaExtra(base: Textura): Textura {
+  const extra = base.alto - TEXTURA_ARENA.alto;
+  if (extra <= 0) return base;
+  return { ...base, transform: `translate(0,${-extra})` };
+}
+
 // river.png (el tile de río plano original) queda sin usar — reemplazado
 // por el sistema de autotiling de abajo. El archivo se deja en el repo por
 // si sirve para otra cosa más adelante.
-const TEXTURA_OASIS = crearTextura(require('../assets/tiles/oasis.png'), 263, 243);
-const TEXTURA_MONTANA = crearTextura(require('../assets/tiles/mountain.png'), 265, 243);
-const TEXTURA_ARBOL_SECO = crearTextura(require('../assets/tiles/dead-tree.png'), 263, 278);
-const TEXTURA_CACTUS = crearTextura(require('../assets/tiles/cactus.png'), 263, 312);
+const TEXTURA_OASIS = conAlturaExtra(crearTextura(require('../assets/tiles/oasis.png'), 263, 243));
+const TEXTURA_MONTANA = conAlturaExtra(crearTextura(require('../assets/tiles/mountain.png'), 265, 243));
+const TEXTURA_ARBOL_SECO = conAlturaExtra(crearTextura(require('../assets/tiles/dead-tree.png'), 263, 278));
+const TEXTURA_CACTUS = conAlturaExtra(crearTextura(require('../assets/tiles/cactus.png'), 263, 312));
 
 // Variedad en 'montana': hash determinístico por coordenada del propio tile
 // (no Math.random(), para que no titile en cada render) — 60% montaña rocosa,
@@ -1316,7 +1332,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
             {geometria.puntos
               .filter(
                 ({ tile }) =>
-                  descubiertas.has(claveCoord(tile)) &&
+                  (DEBUG_SIN_FOG || descubiertas.has(claveCoord(tile))) &&
                   tile.recurso &&
                   !recursosRecolectados.has(claveCoord(tile)) &&
                   // 'arbol' ya tiene su propia textura de tile (dead-tree.png)
@@ -1340,7 +1356,10 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
             {geometria.puntos
               .filter(
-                ({ tile }) => descubiertas.has(claveCoord(tile)) && tile.cofre && !cofresAbiertos.has(claveCoord(tile))
+                ({ tile }) =>
+                  (DEBUG_SIN_FOG || descubiertas.has(claveCoord(tile))) &&
+                  tile.cofre &&
+                  !cofresAbiertos.has(claveCoord(tile))
               )
               .map(({ tile, pixel }) => (
                 <IconoMapa

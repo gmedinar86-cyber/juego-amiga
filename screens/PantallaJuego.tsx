@@ -85,7 +85,27 @@ function conAlturaExtra(base: Textura): Textura {
 const TEXTURA_OASIS = conAlturaExtra(crearTextura(require('../assets/tiles/oasis.png'), 263, 243));
 const TEXTURA_MONTANA = conAlturaExtra(crearTextura(require('../assets/tiles/mountain.png'), 265, 243));
 const TEXTURA_ARBOL_SECO = conAlturaExtra(crearTextura(require('../assets/tiles/dead-tree.png'), 263, 278));
-const TEXTURA_CACTUS = conAlturaExtra(crearTextura(require('../assets/tiles/cactus.png'), 263, 312));
+// cactus.png: OJO, hay que pasarle las dimensiones REALES del archivo acá
+// (263x312) — el ancho/alto que ve <Image preserveAspectRatio="xMidYMid
+// meet"> depende de las dimensiones intrínsecas reales del PNG, no de lo
+// que le digamos a crearTextura, así que "mentirle" con un alto más chico
+// para intentar compensar el margen de más (ver abajo) termina angostando
+// la imagen (letterbox) en vez de arreglar nada.
+//
+// A diferencia de sand/mountain/dead-tree (margen transparente de ~10-11px
+// arriba Y abajo), cactus.png tiene 73px de margen transparente abajo —
+// un recorte de export distinto al resto, no contenido real. Si se lo
+// trata como a los demás (conAlturaExtra), ese margen de más (73-11=62px
+// crudos) se suma al desplazamiento hacia arriba y el bloque queda
+// flotando. Se descuenta ese margen de más, ya escalado, del extra antes
+// de aplicar el mismo criterio que las demás texturas.
+const TEXTURA_CACTUS = (() => {
+  const base = crearTextura(require('../assets/tiles/cactus.png'), 263, 312);
+  const escala = ANCHO_TILE / 263;
+  const margenAbajoDeMasCrudo = 73 - 11;
+  const extra = base.alto - TEXTURA_ARENA.alto - margenAbajoDeMasCrudo * escala;
+  return extra > 0 ? { ...base, transform: `translate(0,${-extra})` } : base;
+})();
 
 // Roca de cambio de rol: a diferencia de las texturas de arriba, esta
 // ilustración no dibuja una base de arena para calzar contra TEXTURA_ARENA

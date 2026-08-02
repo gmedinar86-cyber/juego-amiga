@@ -104,13 +104,22 @@ const TEXTURA_ARBOL_SECO = conAlturaExtra(crearTextura(require('../assets/tiles/
 // crudos) se suma al desplazamiento hacia arriba y el bloque queda
 // flotando. Se descuenta ese margen de más, ya escalado, del extra antes
 // de aplicar el mismo criterio que las demás texturas.
-const TEXTURA_CACTUS = (() => {
-  const base = crearTextura(require('../assets/tiles/cactus.png'), 263, 312);
-  const escala = ANCHO_TILE / 263;
-  const margenAbajoDeMasCrudo = 73 - 11;
+// Helper genérico para el mismo problema que cactus.png: un PNG con margen
+// transparente de más en un solo borde (recorte de export distinto al
+// resto del set), que haría que conAlturaExtra sobrestime el desplazamiento
+// y la textura quede flotando. Se le resta el margen de más (ya escalado)
+// al extra antes de aplicar el mismo criterio que las demás.
+function conMargenAbajoCorregido(base: Textura, anchoOriginal: number, margenAbajoDeMasCrudo: number): Textura {
+  const escala = ANCHO_TILE / anchoOriginal;
   const extra = base.alto - TEXTURA_ARENA.alto - margenAbajoDeMasCrudo * escala;
   return extra > 0 ? { ...base, transform: `translate(0,${-extra})` } : base;
-})();
+}
+
+const TEXTURA_CACTUS = conMargenAbajoCorregido(
+  crearTextura(require('../assets/tiles/cactus.png'), 263, 312),
+  263,
+  73 - 11
+);
 
 // Roca de cambio de rol: a diferencia de las texturas de arriba, esta
 // ilustración no dibuja una base de arena para calzar contra TEXTURA_ARENA
@@ -124,6 +133,19 @@ function conBaseEnVertice(base: Textura): Textura {
   return { ...base, transform: `translate(0,${-extra})` };
 }
 const TEXTURA_ROCA_CLASE = conBaseEnVertice(crearTextura(require('../assets/entorno/roca-cambio-rol.png'), 1209, 1481));
+
+// Recursos con arte real (reemplazan los íconos placeholder de piedra/lana
+// y el cofre): mismo estilo de bloque sobre base de arena que sand/mountain,
+// así que van con conAlturaExtra como esas.
+const TEXTURA_ROCA_MINERAL = conAlturaExtra(crearTextura(require('../assets/entorno/mining-rock.png'), 249, 232));
+const TEXTURA_COFRE_CAJA = conAlturaExtra(crearTextura(require('../assets/entorno/chest.png'), 248, 231));
+// sheep.png tiene el mismo problema de margen que cactus.png (43px abajo
+// contra ~12px en los otros 3 bordes) — mismo fix.
+const TEXTURA_OVEJA = conMargenAbajoCorregido(
+  crearTextura(require('../assets/entorno/sheep.png'), 250, 261),
+  250,
+  43 - 12
+);
 
 // Variedad en 'montana': hash determinístico por coordenada del propio tile
 // (no Math.random(), para que no titile en cada render) — 60% montaña rocosa,
@@ -318,10 +340,19 @@ function texturaRio(tile: TileBioma, tilesPorClave: Map<string, TileBioma>): Tex
 function texturaParaTile(
   tile: TileBioma,
   tilesPorClave: Map<string, TileBioma>,
-  recolectado: boolean
+  recolectado: boolean,
+  cofreAbierto: boolean
 ): Textura | null {
   switch (tile.tipo) {
     case 'arena':
+      // Cofre / piedra / lana ya tienen su propio bloque con arte real —
+      // reemplaza el rombo de arena entero, no es un ícono encima (igual
+      // que 'arbol'). Una vez recolectado/abierto vuelve a verse como
+      // arena plana. La madera "suelta" (tiles de prueba) no tiene bloque
+      // propio todavía, sigue usando el ícono (ver el filtro más abajo).
+      if (tile.cofre && !cofreAbierto) return TEXTURA_COFRE_CAJA;
+      if (tile.recurso === 'piedra' && !recolectado) return TEXTURA_ROCA_MINERAL;
+      if (tile.recurso === 'lana' && !recolectado) return TEXTURA_OVEJA;
       return TEXTURA_ARENA;
     case 'rio':
       return texturaRio(tile, tilesPorClave);
@@ -399,36 +430,13 @@ const ICONO_ARBOL: SegmentoIcono[] = [
   { tipo: 'path', d: 'M12 22v-3' },
 ];
 
-// Placeholders (sin arte propio todavía) para piedra/lana: paths de los
-// iconos lucide "Gem" (mineral) y "Cloud" (aproximación de vellón/lana),
-// mismo criterio que ICONO_ARBOL/ICONO_COFRE de arriba.
-const ICONO_ROCA: SegmentoIcono[] = [
-  { tipo: 'path', d: 'M6 3h12l4 6-10 13L2 9Z' },
-  { tipo: 'path', d: 'M11 3 8 9l4 13 4-13-3-6' },
-  { tipo: 'path', d: 'M2 9h20' },
-];
-
-const ICONO_OVEJA: SegmentoIcono[] = [
-  { tipo: 'path', d: 'M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z' },
-];
-
-// Qué ícono/color usar para cada tipo de recurso de tile — agregar un nuevo
-// recurso (data-driven, ver lib/objetos.ts) solo necesita una entrada acá.
+// Qué ícono/color usar para cada tipo de recurso de tile sin bloque propio
+// — piedra/lana ya tienen textura real (ver texturaParaTile), así que no
+// están acá. Agregar un nuevo recurso sin arte (data-driven, ver
+// lib/objetos.ts) solo necesita una entrada acá.
 const ICONOS_RECURSO: Record<string, { segmentos: SegmentoIcono[]; color: string }> = {
   madera: { segmentos: ICONO_ARBOL, color: '#7BC96F' },
-  piedra: { segmentos: ICONO_ROCA, color: '#9AA5B1' },
-  lana: { segmentos: ICONO_OVEJA, color: '#F2F2F2' },
 };
-
-const ICONO_COFRE: SegmentoIcono[] = [
-  {
-    tipo: 'path',
-    d: 'M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z',
-  },
-  { tipo: 'path', d: 'M12 22V12' },
-  { tipo: 'polyline', points: '3.29 7 12 12 20.71 7' },
-  { tipo: 'path', d: 'm7.5 4.27 9 5.15' },
-];
 
 function IconoMapa({ segmentos, x, y, color }: { segmentos: SegmentoIcono[]; x: number; y: number; color: string }) {
   const escala = ICONO_TAMANO / ICONO_VIEWBOX;
@@ -1326,7 +1334,9 @@ export default function PantallaJuego({ session }: { session: Session }) {
               // Textura solo en tiles revelados — si se dibujara también en
               // niebla, la silueta (montaña, río) se filtraría a través del
               // fill oscuro de fog, que es una capa aparte con su propio alfa.
-              const textura = revelada ? texturaParaTile(tile, tilesPorClave, recursosRecolectados.has(clave)) : null;
+              const textura = revelada
+                ? texturaParaTile(tile, tilesPorClave, recursosRecolectados.has(clave), cofresAbiertos.has(clave))
+                : null;
 
               return (
                 <Fragment key={clave}>
@@ -1398,11 +1408,13 @@ export default function PantallaJuego({ session }: { session: Session }) {
                   (DEBUG_SIN_FOG || descubiertas.has(claveCoord(tile))) &&
                   tile.recurso &&
                   !recursosRecolectados.has(claveCoord(tile)) &&
-                  // 'arbol' ya tiene su propia textura de tile (dead-tree.png)
-                  // que deja claro qué es — el ícono encima sería redundante.
-                  // Los tiles de madera "sueltos" (tipo 'arena', de prueba)
-                  // sí lo necesitan, como piedra/lana.
-                  tile.tipo !== 'arbol'
+                  // 'arbol', piedra y lana ya tienen su propia textura de
+                  // tile (dead-tree/mining-rock/sheep) — el ícono encima
+                  // sería redundante. Solo la madera "suelta" (tiles de
+                  // prueba, tipo 'arena' sin bloque propio) lo necesita.
+                  tile.tipo !== 'arbol' &&
+                  tile.recurso !== 'piedra' &&
+                  tile.recurso !== 'lana'
               )
               .map(({ tile, pixel }) => {
                 const icono = ICONOS_RECURSO[tile.recurso!] ?? ICONOS_RECURSO.madera;
@@ -1416,23 +1428,6 @@ export default function PantallaJuego({ session }: { session: Session }) {
                   />
                 );
               })}
-
-            {geometria.puntos
-              .filter(
-                ({ tile }) =>
-                  (DEBUG_SIN_FOG || descubiertas.has(claveCoord(tile))) &&
-                  tile.cofre &&
-                  !cofresAbiertos.has(claveCoord(tile))
-              )
-              .map(({ tile, pixel }) => (
-                <IconoMapa
-                  key={`cofre-${claveCoord(tile)}`}
-                  segmentos={ICONO_COFRE}
-                  x={pixel.x}
-                  y={pixel.y}
-                  color="#D4A017"
-                />
-              ))}
 
             {(() => {
               const pixelJugador = isoAPixel(posicionVisual, ANCHO_TILE, ALTO_TILE);

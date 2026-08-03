@@ -439,7 +439,7 @@ function texturaParaTile(
     case 'portal':
       return TEXTURA_PORTAL;
     case 'cactus':
-      return TEXTURA_CACTUS_PELIGROSO;
+      return TEXTURA_CACTUS;
     default:
       return null; // otros tipos sin textura: sigue con colorTile
   }
@@ -617,8 +617,10 @@ function crearEsTransitableJugador(puentes: Map<string, Coord>) {
 }
 
 // Vecino CARDINAL (no diagonal) de `origen` que sea río y todavía no tenga
-// puente — usado tanto para decidir si mostrar "Construir puente" como para
-// elegir el tile objetivo al construirlo.
+// puente, sin importar el ancho — usado solo para decidir si mostrar el
+// botón "Construir puente" (si no hay NINGÚN río cerca, no tiene sentido
+// mostrarlo) y para poder distinguir, al explicar por qué falló, entre "no
+// hay río cerca" y "hay río pero es muy ancho".
 function buscarVecinoRioSinPuente(
   origen: Coord,
   tilesPorClave: Map<string, TileBioma>,
@@ -631,8 +633,42 @@ function buscarVecinoRioSinPuente(
   return undefined;
 }
 
+// Un tramo de río se considera "de 1 sola casilla de ancho" con el mismo
+// criterio que ya usa el render para decidir el ancho visual del río (ver
+// rioGeometria/anchoLocal más abajo): más de 2 vecinos (8 direcciones) que
+// también son río implica una confluencia o dos filas paralelas, no un
+// canal angosto — ahí no se puede construir puente.
+function esRioDeUnaCasilla(tile: TileBioma, tilesPorClave: Map<string, TileBioma>): boolean {
+  const vecinosRio = vecinos(tile).filter((v) => tilesPorClave.get(claveCoord(v))?.tipo === 'rio').length;
+  return vecinosRio <= 2;
+}
+
+// Igual que buscarVecinoRioSinPuente, pero solo devuelve un candidato válido
+// para construir puente ahí (además angosto). Se usa al construir de verdad.
+function buscarVecinoRioParaPuente(
+  origen: Coord,
+  tilesPorClave: Map<string, TileBioma>,
+  puentes: Map<string, Coord>
+): TileBioma | undefined {
+  for (const d of Object.values(BORDE_DELTA)) {
+    const vecino = tilesPorClave.get(claveCoord({ x: origen.x + d.x, y: origen.y + d.y }));
+    if (vecino?.tipo === 'rio' && !puentes.has(claveCoord(vecino)) && esRioDeUnaCasilla(vecino, tilesPorClave)) {
+      return vecino;
+    }
+  }
+  return undefined;
+}
+
+// El lado "suelo" de una cuerda colocada desde una montaña tiene que ser
+// arena vacía de verdad (sin recurso ni cofre encima) — no cualquier tile
+// que no sea montaña (eso incluiría río, cactus, u otras casillas donde no
+// tiene sentido bajar).
+function esArenaVaciaParaCuerda(tile: TileBioma): boolean {
+  return tile.tipo === 'arena' && !tile.recurso && !tile.cofre;
+}
+
 // Para "Colocar cuerda": si el jugador está sobre una montaña, busca un
-// vecino que NO sea montaña (el lado "suelo" al que se baja); si está en
+// vecino de arena vacía (el lado "suelo" al que se baja); si está en
 // tierra, busca un vecino que SÍ sea montaña (el lado "montaña" al que se
 // sube). "Al lado" usa las 8 direcciones (vecinos), no solo cardinales — una
 // montaña es un área, no una arista fina como el río.
@@ -643,7 +679,7 @@ function buscarParParaCuerda(
   if (origen.tipo === 'montana') {
     for (const v of vecinos(origen)) {
       const vecino = tilesPorClave.get(claveCoord(v));
-      if (vecino && vecino.tipo !== 'montana') return { suelo: vecino, montana: origen };
+      if (vecino && esArenaVaciaParaCuerda(vecino)) return { suelo: vecino, montana: origen };
     }
     return undefined;
   }
@@ -679,6 +715,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const [inventarioVisible, setInventarioVisible] = useState(false);
   const [crafteoVisible, setCrafteoVisible] = useState(false);
   const [resetVisible, setResetVisible] = useState(false);
+  const [ayudaVisible, setAyudaVisible] = useState(false);
   const [mensajeAccion, setMensajeAccion] = useState<string | null>(null);
   const [golpeCactus, setGolpeCactus] = useState(false);
   const [cargando, setCargando] = useState(true);
@@ -1024,9 +1061,23 @@ export default function PantallaJuego({ session }: { session: Session }) {
       return;
     }
 
-    const radio = tileDestino?.tipo === 'montana' ? RADIO_VISION_MONTANA : RADIO_VISION_DEFAULT;
+    const enMontana = tileDestino?.tipo === 'montana';
+    const radio = enMontana ? RADIO_VISION_MONTANA : RADIO_VISION_DEFAULT;
+    // El predicado por defecto de fusionarDescubiertas (transitabilidad de
+    // suelo) excluye 'montana' — si se usara acá, el BFS de revelado ni
+    // siquiera podría expandirse desde el propio tile donde está parado el
+    // jugador (radio 3 quedaría en los hechos como radio 0). Parado en una
+    // montaña, el radio se expande a través del cúmulo de montaña conectado,
+    // igual que ya restringe el movimiento por tap (ver iniciarCaminoHacia).
+    const predicadoVision = enMontana ? (t: TileBioma) => t.tipo === 'montana' : undefined;
 
-    const actualizadas = fusionarDescubiertas(descubiertasRef.current, destinoPaso, tilesPorClave, radio);
+    const actualizadas = fusionarDescubiertas(
+      descubiertasRef.current,
+      destinoPaso,
+      tilesPorClave,
+      radio,
+      predicadoVision
+    );
     const huboNuevoDescubrimiento = actualizadas.size !== descubiertasRef.current.size;
     descubiertasRef.current = actualizadas;
     setDescubiertas(actualizadas);
@@ -1374,12 +1425,32 @@ export default function PantallaJuego({ session }: { session: Session }) {
     mostrarMensaje(`Crafteaste ${nombreObjeto}`);
   }
 
+  // Valida cada condición por separado y explica con un mensaje cuál falta
+  // en vez de fallar en silencio — el jugador no tiene por qué adivinar que
+  // hace falta un río angosto, banco de trabajo o cuánta madera falta.
   async function construirPuente() {
-    if (!progreso || !descubrimientoId || !tieneBancoDeTrabajo) return;
+    if (!progreso || !descubrimientoId) return;
     const origen = { x: progreso.posicion_q, y: progreso.posicion_r };
-    const objetivo = buscarVecinoRioSinPuente(origen, tilesPorClave, puentesConstruidos);
-    if (!objetivo) return;
-    if (cantidadDeObjeto(inventario, catalogoObjetos, 'Madera') < COSTO_PUENTE_MADERA) return;
+
+    const objetivo = buscarVecinoRioParaPuente(origen, tilesPorClave, puentesConstruidos);
+    if (!objetivo) {
+      const vecinoCualquiera = buscarVecinoRioSinPuente(origen, tilesPorClave, puentesConstruidos);
+      if (!vecinoCualquiera) {
+        mostrarMensaje('Necesitás estar junto a un río para construir un puente');
+      } else {
+        mostrarMensaje('Ese tramo de río es muy ancho — buscá un tramo de 1 sola casilla');
+      }
+      return;
+    }
+    if (!tieneBancoDeTrabajo) {
+      mostrarMensaje('Necesitás un banco de trabajo para construir un puente');
+      return;
+    }
+    const cantidadMadera = cantidadDeObjeto(inventario, catalogoObjetos, 'Madera');
+    if (cantidadMadera < COSTO_PUENTE_MADERA) {
+      mostrarMensaje(`Te faltan ${COSTO_PUENTE_MADERA - cantidadMadera} de madera para el puente`);
+      return;
+    }
 
     const madera = Array.from(catalogoObjetos.values()).find((o) => o.nombre === 'Madera');
     if (!madera) return;
@@ -1425,15 +1496,37 @@ export default function PantallaJuego({ session }: { session: Session }) {
     }
   }
 
+  // Igual que construirPuente: valida cada condición por separado y explica
+  // con un mensaje cuál falta, en vez de fallar en silencio.
   async function colocarCuerda() {
     if (!progreso || !descubrimientoId || !tileActual) return;
+
+    const cercaDeMontana =
+      tileActual.tipo === 'montana' ||
+      vecinos(tileActual).some((v) => tilesPorClave.get(claveCoord(v))?.tipo === 'montana');
+    if (!cercaDeMontana) {
+      mostrarMensaje('Necesitás estar junto a una montaña para usar la cuerda');
+      return;
+    }
+
     const par = buscarParParaCuerda(tileActual, tilesPorClave);
-    if (!par) return;
-    if (cuerdasConstruidas.some((c) => coordsIguales(c.suelo, par.suelo) && coordsIguales(c.montana, par.montana))) return;
+    if (!par) {
+      // Solo puede fallar acá parado EN la montaña: no hay ninguna casilla
+      // de arena vacía (sin recurso ni cofre) al lado para bajar.
+      mostrarMensaje('No hay una casilla de arena vacía al lado para bajar la cuerda');
+      return;
+    }
+    if (cuerdasConstruidas.some((c) => coordsIguales(c.suelo, par.suelo) && coordsIguales(c.montana, par.montana))) {
+      mostrarMensaje('Ya hay una cuerda colocada ahí');
+      return;
+    }
 
     const cuerdaObjeto = Array.from(catalogoObjetos.values()).find((o) => o.nombre === 'Cuerda');
     const instancia = cuerdaObjeto ? inventario.find((item) => item.objeto_id === cuerdaObjeto.id) : undefined;
-    if (!instancia) return;
+    if (!instancia) {
+      mostrarMensaje('Necesitás una Cuerda en el inventario');
+      return;
+    }
 
     const { error: errBorrar } = await supabase.from('inventario_jugador').delete().eq('id', instancia.id);
     if (errBorrar) {
@@ -1781,26 +1874,23 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const herramientaFaltante =
     tileActual?.recurso && !recursoHabilitado ? herramientaParaRecurso(catalogoObjetos, tileActual.recurso) : undefined;
 
-  // "Construir puente" solo aparece si el jugador está parado justo al lado
-  // de un río sin puente, y además tiene banco de trabajo y suficiente
-  // madera.
+  // "Construir puente" aparece con solo estar junto a CUALQUIER río sin
+  // puente (sin importar ancho, banco de trabajo o madera) — el resto de
+  // las condiciones las valida y explica construirPuente() al tocarlo, en
+  // vez de que el botón directamente no aparezca.
   const vecinoRioParaPuente =
     !caminando && tileActual ? buscarVecinoRioSinPuente(tileActual, tilesPorClave, puentesConstruidos) : undefined;
-  const mostrarBotonPuente =
-    !!vecinoRioParaPuente &&
-    tieneBancoDeTrabajo &&
-    cantidadDeObjeto(inventario, catalogoObjetos, 'Madera') >= COSTO_PUENTE_MADERA;
+  const mostrarBotonPuente = !!vecinoRioParaPuente;
 
-  // "Colocar cuerda": al lado o encima de una montaña, con al menos 1
-  // Cuerda en el inventario, y sin que ya exista una cuerda idéntica ahí.
-  const parCuerdaNuevo = !caminando && tileActual ? buscarParParaCuerda(tileActual, tilesPorClave) : undefined;
-  const yaHayCuerdaAqui =
-    !!parCuerdaNuevo &&
-    cuerdasConstruidas.some(
-      (c) => coordsIguales(c.suelo, parCuerdaNuevo.suelo) && coordsIguales(c.montana, parCuerdaNuevo.montana)
-    );
+  // "Colocar cuerda" aparece con solo estar al lado o encima de CUALQUIER
+  // montaña — el resto de las condiciones (casilla vacía para bajar, cuerda
+  // duplicada, Cuerda en inventario) las valida y explica colocarCuerda() al
+  // tocarlo.
   const mostrarBotonColocarCuerda =
-    !!parCuerdaNuevo && !yaHayCuerdaAqui && cantidadDeObjeto(inventario, catalogoObjetos, 'Cuerda') >= 1;
+    !caminando &&
+    !!tileActual &&
+    (tileActual.tipo === 'montana' ||
+      vecinos(tileActual).some((v) => tilesPorClave.get(claveCoord(v))?.tipo === 'montana'));
 
   // "Subir montaña": parado justo en el lado "suelo" de una cuerda ya
   // colocada. "Bajar montaña": parado en el lado "montaña" de cualquier
@@ -1840,6 +1930,9 @@ export default function PantallaJuego({ session }: { session: Session }) {
           )}
           <TouchableOpacity onPress={() => setResetVisible(true)}>
             <Text style={styles.enlace}>Reiniciar nivel</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setAyudaVisible(true)}>
+            <Text style={styles.enlace}>Ayuda</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={() => supabase.auth.signOut()}>
             <Text style={styles.enlace}>Cerrar sesión</Text>
@@ -1933,6 +2026,39 @@ export default function PantallaJuego({ session }: { session: Session }) {
             </TouchableOpacity>
             <TouchableOpacity style={styles.boton} onPress={() => setResetVisible(false)}>
               <Text style={styles.botonTexto}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={ayudaVisible} transparent animationType="fade" onRequestClose={() => setAyudaVisible(false)}>
+        <View style={styles.modalFondo}>
+          <View style={styles.modalContenido}>
+            <Text style={styles.modalTitulo}>Ayuda</Text>
+
+            <Text style={styles.modalSubtitulo}>Puente</Text>
+            <Text style={styles.modalVacio}>
+              Parate justo al lado de un tramo de río de 1 sola casilla de ancho (no sirve en tramos anchos o
+              confluencias). Necesitás un banco de trabajo y 10 de madera. Si intentás construirlo sin cumplir algo,
+              el juego te dice exactamente qué te falta.
+            </Text>
+
+            <Text style={styles.modalSubtitulo}>Cuerda</Text>
+            <Text style={styles.modalVacio}>
+              Se craftea con 5 de lana en el banco de trabajo. Para colocarla y subir, parate al lado de una montaña.
+              Para colocar una nueva cuerda que sirva para bajar, parate arriba de la montaña, al lado de una casilla
+              de arena vacía (sin recurso ni cofre).
+            </Text>
+
+            <Text style={styles.modalSubtitulo}>Bajar de una montaña</Text>
+            <Text style={styles.modalVacio}>
+              Una vez arriba solo podés caminar por casillas de montaña, no podés bajar caminando directo a la
+              arena. Para bajar usá "Bajar montaña" parado en el punto de la cuerda que usaste para subir, o en el
+              de cualquier otra cuerda que hayas colocado desde ahí arriba.
+            </Text>
+
+            <TouchableOpacity style={styles.boton} onPress={() => setAyudaVisible(false)}>
+              <Text style={styles.botonTexto}>Cerrar</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -2320,6 +2446,12 @@ const styles = StyleSheet.create({
     color: '#7E8BA3',
     fontSize: 13,
     marginBottom: 12,
+  },
+  modalSubtitulo: {
+    color: '#F6EFD8',
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 4,
   },
   modalFila: {
     flexDirection: 'row',

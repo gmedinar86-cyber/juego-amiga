@@ -22,6 +22,11 @@ export interface GridBioma {
   spawn: Coord;
   portal: Coord;
   tiles: TileBioma[];
+  // Ubicaciones guardadas para más adelante — todavía sin lógica de combate,
+  // solo se persisten junto con el resto del grid (ver 'enemigo'/'jefe_final'
+  // en texturaParaTile/colorTile, PantallaJuego.tsx).
+  enemigos?: Coord[];
+  jefe_final?: Coord;
 }
 
 export interface Bioma {
@@ -38,12 +43,18 @@ export interface ProgresoJugador {
   nivel: number;
   fuerza: number;
   vida_maxima: number;
+  vida_actual: number;
   clase_actual_id: string | null;
   bioma_actual_id: string | null;
   // posicion_q/posicion_r son columnas genéricas en Supabase; aquí guardan x/y del grid isométrico.
   posicion_q: number;
   posicion_r: number;
   actualizado_en: string;
+}
+
+export interface CuerdaConstruida {
+  suelo: Coord;
+  montana: Coord;
 }
 
 export interface DescubrimientoJugador {
@@ -53,6 +64,8 @@ export interface DescubrimientoJugador {
   casillas_descubiertas: Coord[];
   cofres_abiertos: Coord[];
   recursos_recolectados: Coord[];
+  puentes_construidos: Coord[];
+  cuerdas_construidas: CuerdaConstruida[];
 }
 
 export interface Objeto {
@@ -68,4 +81,9 @@ export interface InventarioItem {
   usuario_id: string;
   objeto_id: string;
   obtenido_en: string;
+  // Solo se completa para instancias de Hacha/Pico (arranca en 10, se
+  // decrementa por uso — ver recolectar() en PantallaJuego.tsx). El resto de
+  // items (materiales, Tijeras, Banco de trabajo, Cuerda, Poción) la deja en
+  // null.
+  usos_restantes: number | null;
 }

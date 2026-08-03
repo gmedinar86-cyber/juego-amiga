@@ -6,15 +6,22 @@ import type { TileBioma } from './tipos';
 // alcanza con BFS para el camino más corto (no hace falta A*).
 // Devuelve los pasos desde `origen` (sin incluirlo) hasta `destino`
 // (incluido), o null si no existe camino transitable.
+//
+// `esTransitableFn` es reemplazable para contextos donde la transitabilidad
+// no depende solo del tile en sí: un río con puente construido cuenta como
+// transitable para ese jugador, y al escalar una montaña el predicado se
+// restringe a solo tiles 'montana' (ver PantallaJuego.tsx). Por defecto usa
+// la regla genérica de generadorTerreno.ts.
 export function encontrarCamino(
   origen: Coord,
   destino: Coord,
-  tilesPorClave: Map<string, TileBioma>
+  tilesPorClave: Map<string, TileBioma>,
+  esTransitableFn: (tile: TileBioma) => boolean = esTransitable
 ): Coord[] | null {
   if (coordsIguales(origen, destino)) return [];
 
   const tileDestino = tilesPorClave.get(claveCoord(destino));
-  if (!tileDestino || !esTransitable(tileDestino)) return null;
+  if (!tileDestino || !esTransitableFn(tileDestino)) return null;
 
   const visitado = new Set<string>([claveCoord(origen)]);
   const anterior = new Map<string, Coord>();
@@ -36,7 +43,7 @@ export function encontrarCamino(
       const clave = claveCoord(vecino);
       if (visitado.has(clave)) continue;
       const tile = tilesPorClave.get(clave);
-      if (!tile || !esTransitable(tile)) continue;
+      if (!tile || !esTransitableFn(tile)) continue;
       visitado.add(clave);
       anterior.set(clave, actual);
       cola.push(vecino);
@@ -53,7 +60,12 @@ export function encontrarCamino(
 // agrega al resultado, para que se vea como "pared") pero no se usa para
 // seguir expandiendo la búsqueda más allá de ella. Sin obstáculos de por
 // medio, da exactamente el mismo resultado que un radio Chebyshev normal.
-export function tilesAlcanzables(centro: Coord, radio: number, tilesPorClave: Map<string, TileBioma>): Coord[] {
+export function tilesAlcanzables(
+  centro: Coord,
+  radio: number,
+  tilesPorClave: Map<string, TileBioma>,
+  esTransitableFn: (tile: TileBioma) => boolean = esTransitable
+): Coord[] {
   const claveCentro = claveCoord(centro);
   const visitado = new Map<string, Coord>([[claveCentro, centro]]);
   const cola: { coord: Coord; distancia: number }[] = [{ coord: centro, distancia: 0 }];
@@ -63,7 +75,7 @@ export function tilesAlcanzables(centro: Coord, radio: number, tilesPorClave: Ma
     if (distancia >= radio) continue;
 
     const tile = tilesPorClave.get(claveCoord(coord));
-    if (!tile || !esTransitable(tile)) continue;
+    if (!tile || !esTransitableFn(tile)) continue;
 
     for (const vecino of vecinos(coord)) {
       const clave = claveCoord(vecino);

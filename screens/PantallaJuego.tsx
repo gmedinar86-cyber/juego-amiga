@@ -7,21 +7,41 @@ import { supabase } from '../lib/supabase';
 import {
   claveCoord,
   claveProfundidad,
+  coordsIguales,
   esquinasRombo,
   isoAPixel,
   pixelAGrid,
   vecinos,
   type Coord,
 } from '../lib/isoGrid';
+import { esTransitable } from '../lib/generadorTerreno';
 import { encontrarCamino, tilesAlcanzables } from '../lib/pathfinding';
-import { herramientaParaRecurso, objetoParaRecurso, recursosHabilitados as calcularRecursosHabilitados } from '../lib/objetos';
-import type { Bioma, DescubrimientoJugador, InventarioItem, Objeto, ProgresoJugador, TileBioma } from '../lib/tipos';
+import {
+  cantidadDeObjeto,
+  hayEspacioPara,
+  herramientaParaRecurso,
+  HERRAMIENTAS_CON_DURABILIDAD,
+  objetoParaRecurso,
+  RECETAS_CRAFTEO,
+  recursosHabilitados as calcularRecursosHabilitados,
+  tieneBancoDeTrabajo as calcularTieneBancoDeTrabajo,
+  topeInventario,
+  USOS_INICIALES_HERRAMIENTA,
+} from '../lib/objetos';
+import type { Bioma, CuerdaConstruida, DescubrimientoJugador, InventarioItem, Objeto, ProgresoJugador, TileBioma } from '../lib/tipos';
 
 const RADIO_VISION_DEFAULT = 1;
 const RADIO_VISION_MONTANA = 3;
 const DURACION_PASO_MS = 200;
 const SIN_CAMINO_FLASH_MS = 350;
 const MENSAJE_ACCION_MS = 1800;
+const GOLPE_CACTUS_MS = 400;
+const DANO_CACTUS = 2;
+const COSTO_PUENTE_MADERA = 10;
+// Tope de vida del sistema nuevo de cactus/daño — independiente de
+// progreso.vida_maxima (columna preexistente, ya en uso con otro valor
+// por defecto para otros fines, no la pisamos).
+const VIDA_MAXIMA = 10;
 const ANCHO_TILE = 72;
 const ALTO_TILE = 36;
 const CAMARA_RADIO = 2.5;
@@ -88,7 +108,10 @@ function conAlturaExtra(base: Textura): Textura {
 // por el sistema de autotiling de abajo. El archivo se deja en el repo por
 // si sirve para otra cosa más adelante.
 const TEXTURA_OASIS = conAlturaExtra(crearTextura(require('../assets/tiles/oasis.png'), 263, 243));
-const TEXTURA_MONTANA = conAlturaExtra(crearTextura(require('../assets/tiles/mountain.png'), 265, 243));
+// mountain-v2.png reemplaza al mountain.png viejo (mismo estilo "roca suelta"
+// que roca-cambio-rol/cactus-v2/las variantes con cuerda — sin base de arena
+// compartida), así que va con conBaseEnVertice, no conAlturaExtra.
+const TEXTURA_MONTANA = conBaseEnVertice(crearTextura(require('../assets/entorno/mountain-v2.png'), 597, 549));
 const TEXTURA_ARBOL_SECO = conAlturaExtra(crearTextura(require('../assets/tiles/dead-tree.png'), 263, 278));
 // cactus.png: OJO, hay que pasarle las dimensiones REALES del archivo acá
 // (263x312) — el ancho/alto que ve <Image preserveAspectRatio="xMidYMid
@@ -121,18 +144,46 @@ const TEXTURA_CACTUS = conMargenAbajoCorregido(
   73 - 11
 );
 
-// Roca de cambio de rol: a diferencia de las texturas de arriba, esta
-// ilustración no dibuja una base de arena para calzar contra TEXTURA_ARENA
-// (es una roca "suelta" con su propio pedregal en la base, sin la caja de
-// paredes que sí tienen sand/mountain/dead-tree). Se ancla distinto:
-// directamente por el vértice INFERIOR del rombo (el pedregal apoya ahí),
-// no por el superior — conAlturaExtra asume una base compartida que esta
-// pieza no tiene.
+// roca-cambio-rol.png es en realidad la textura del PORTAL (monolito de
+// piedra) — no de la roca de cambio de rol, que todavía no tiene arte
+// propia (ver 'roca_clase' en texturaParaTile). A diferencia de las
+// texturas de arriba, esta ilustración no dibuja una base de arena para
+// calzar contra TEXTURA_ARENA (es una roca "suelta" con su propio pedregal
+// en la base, sin la caja de paredes que sí tienen sand/mountain/dead-tree).
+// Se ancla distinto: directamente por el vértice INFERIOR del rombo (el
+// pedregal apoya ahí), no por el superior — conAlturaExtra asume una base
+// compartida que esta pieza no tiene.
 function conBaseEnVertice(base: Textura): Textura {
   const extra = base.alto - ALTO_TILE;
   return { ...base, transform: `translate(0,${-extra})` };
 }
-const TEXTURA_ROCA_CLASE = conBaseEnVertice(crearTextura(require('../assets/entorno/roca-cambio-rol.png'), 1209, 1481));
+const TEXTURA_PORTAL = conBaseEnVertice(crearTextura(require('../assets/entorno/roca-cambio-rol.png'), 1209, 1481));
+
+// Igual que conBaseEnVertice, pero para PNGs de este mismo estilo "suelto"
+// que además traen un margen transparente real por debajo del contenido
+// visible (recorte de export, no contenido) — sin corregirlo, ese margen
+// queda POR DEBAJO del vértice del rombo (que es donde ancla conBaseEnVertice)
+// y la base visible del dibujo se ve flotando sobre el tile en vez de
+// apoyada en él. Mismo criterio que conMargenAbajoCorregido, adaptado al
+// anclaje por vértice inferior en vez de por borde superior.
+function conBaseEnVerticeConMargen(base: Textura, anchoOriginal: number, margenAbajoCrudo: number): Textura {
+  const escala = ANCHO_TILE / anchoOriginal;
+  const extra = base.alto - ALTO_TILE - margenAbajoCrudo * escala;
+  return { ...base, transform: `translate(0,${-extra})` };
+}
+
+// Cactus "peligroso": tile propio (no la variante decorativa de adorno sobre
+// montaña, ver TEXTURA_CACTUS/texturaMontana más arriba). Mismo estilo que
+// la roca de cambio de rol: dibujo "suelto" con su propia base de arena
+// incluida, se ancla por el vértice inferior — cactus-v2.png además tiene
+// ~19px de margen transparente real por debajo de esa base (recorte de
+// export), que hay que descontar para que quede apoyada en el tile y no
+// flotando sobre él.
+const TEXTURA_CACTUS_PELIGROSO = conBaseEnVerticeConMargen(
+  crearTextura(require('../assets/entorno/cactus-v2.png'), 453, 732),
+  453,
+  19
+);
 
 // Recursos con arte real (reemplazan los íconos placeholder de piedra/lana
 // y el cofre): mismo estilo de bloque sobre base de arena que sand/mountain,
@@ -147,10 +198,30 @@ const TEXTURA_OVEJA = conMargenAbajoCorregido(
   43 - 12
 );
 
+// Punto "montaña" de una cuerda ya colocada: mismo modelo de roca que
+// TEXTURA_MONTANA pero con la soga tallada, para que se note a simple vista
+// dónde se puede subir/bajar sin agregar un ícono aparte.
+const TEXTURA_MONTANA_CUERDA_1 = conBaseEnVertice(
+  crearTextura(require('../assets/entorno/mountain-rope-1.png'), 347, 340)
+);
+const TEXTURA_MONTANA_CUERDA_2 = conBaseEnVertice(
+  crearTextura(require('../assets/entorno/mountain-rope-2.png'), 341, 326)
+);
+
+const TEXTURA_PUENTE = conAlturaExtra(crearTextura(require('../assets/entorno/puente-madera.png'), 600, 466));
+
 // Variedad en 'montana': hash determinístico por coordenada del propio tile
 // (no Math.random(), para que no titile en cada render) — 60% montaña rocosa,
 // 20% árbol seco, 20% cactus, como acento disperso en vez de franjas parejas.
-function texturaMontana(tile: TileBioma): Textura {
+// Si el tile tiene una cuerda colocada, eso pisa la variedad normal: se elige
+// la variante según el LADO real por el que sale la cuerda (hacia dónde
+// queda el punto "suelo" respecto a esta montaña en pantalla), no al azar —
+// rope-1 sale por la izquierda, rope-2 por la derecha.
+function texturaMontana(tile: TileBioma, cuerda?: CuerdaConstruida): Textura {
+  if (cuerda) {
+    const haciaLaDerecha = cuerda.suelo.x - tile.x - (cuerda.suelo.y - tile.y) > 0;
+    return haciaLaDerecha ? TEXTURA_MONTANA_CUERDA_2 : TEXTURA_MONTANA_CUERDA_1;
+  }
   const hash = Math.abs(tile.x * 928371 + tile.y * 543217) % 10;
   if (hash < 6) return TEXTURA_MONTANA;
   if (hash < 8) return TEXTURA_ARBOL_SECO;
@@ -341,7 +412,8 @@ function texturaParaTile(
   tile: TileBioma,
   tilesPorClave: Map<string, TileBioma>,
   recolectado: boolean,
-  cofreAbierto: boolean
+  cofreAbierto: boolean,
+  cuerdaEnEsteMontana?: CuerdaConstruida
 ): Textura | null {
   switch (tile.tipo) {
     case 'arena':
@@ -359,15 +431,19 @@ function texturaParaTile(
     case 'oasis':
       return TEXTURA_OASIS;
     case 'montana':
-      return texturaMontana(tile);
+      return texturaMontana(tile, cuerdaEnEsteMontana);
     case 'arbol':
       // Ya recolectado (madera): vuelve a verse como arena plana, igual que
       // piedra/lana cuando se juntan (ver el filtro de íconos más abajo).
       return recolectado ? TEXTURA_ARENA : TEXTURA_ARBOL_SECO;
+    case 'roca_clase':
+      // Landmark de cambio de rol, separado del portal — todavía sin arte
+      // propia (ver comentario en TEXTURA_PORTAL), sigue con colorTile.
+      return null;
     case 'portal':
-      // La roca de cambio de rol se usa también como portal — mismo objeto
-      // en el mundo, doble función (ver assets/entorno/roca-cambio-rol.png).
-      return TEXTURA_ROCA_CLASE;
+      return TEXTURA_PORTAL;
+    case 'cactus':
+      return TEXTURA_CACTUS_PELIGROSO;
     default:
       return null; // otros tipos sin textura: sigue con colorTile
   }
@@ -379,6 +455,9 @@ const ANCHO_RIO_ANCHO = ANCHO_RIO_BASE * 1.6;
 const RIO_BORDE_EXTRA = 6;
 const COLOR_RIO_AGUA = '#2E6F8E'; // mismo azul que ya usaba colorTile('rio')
 const COLOR_RIO_BORDE = '#1B4E63';
+// Color de fondo bajo TEXTURA_PUENTE (asset real, ver más abajo) para que no
+// se filtre el azul de río en los márgenes transparentes del PNG.
+const COLOR_PUENTE = '#B8894F';
 
 interface JuntaRio {
   tile: TileBioma;
@@ -468,7 +547,7 @@ function easeOutCubic(t: number): number {
 // DEBUG: muestra el bioma completo sin niebla, solo para esta fase de pruebas.
 // Solo afecta qué color se pinta — no toca `descubiertas` ni lo persistido en
 // descubrimiento_jugador. Volver a `false` cuando dejemos de necesitarlo.
-const DEBUG_SIN_FOG = true;
+const DEBUG_SIN_FOG = false;
 
 interface LimitesBioma {
   minX: number;
@@ -497,11 +576,23 @@ function colorTile(tipo: string): string {
       return '#2E6F8E';
     case 'oasis':
       return '#2E7D6B';
+    // 'enemigo'/'jefe_final': todavía sin implementar (ver plan) — solo se
+    // guarda la ubicación marcada en el mapa, con un color placeholder para
+    // poder verificarla a simple vista hasta que exista la mecánica real.
+    case 'enemigo':
+      return '#FCA5A5';
+    case 'jefe_final':
+      return '#7F1D1D';
+    // roca_clase todavía no tiene arte propia (ver texturaParaTile) — color
+    // plano distintivo (violeta) para que se distinga de la arena mientras
+    // tanto. La interacción real de cambio de clase se construye aparte.
+    case 'roca_clase':
+      return '#8B5CF6';
     default:
-      // 'portal' cae acá a propósito: ahora tiene textura propia (la roca
-      // de cambio de rol, ver texturaParaTile) que no cubre todo el rombo
-      // (es una roca "suelta", no un bloque como sand/montaña), así que el
-      // fondo visible alrededor debe ser arena, no un color de relleno.
+      // 'portal' cae acá a propósito: tiene textura propia (el monolito, ver
+      // texturaParaTile) que no cubre todo el rombo (es una roca "suelta",
+      // no un bloque como sand/montaña) — el fondo visible alrededor debe
+      // ser arena, no un color de relleno.
       return '#B98A4A';
   }
 }
@@ -520,6 +611,61 @@ function limitarOffset(propuesto: Coord, centroJugador: Coord, limites: LimitesB
   };
 }
 
+// Transitabilidad "de jugador": la genérica de generadorTerreno.ts (nunca
+// cuenta montaña/río) más los ríos donde este jugador ya construyó un
+// puente. Se arma como factory (no lee estado directo) para poder usarla
+// tanto con el Map ya en useState como con uno recién leído de Supabase
+// durante la carga inicial, antes de que el estado exista.
+function crearEsTransitableJugador(puentes: Map<string, Coord>) {
+  return (tile: TileBioma): boolean => esTransitable(tile) || (tile.tipo === 'rio' && puentes.has(claveCoord(tile)));
+}
+
+// Vecino CARDINAL (no diagonal) de `origen` que sea río y todavía no tenga
+// puente — usado tanto para decidir si mostrar "Construir puente" como para
+// elegir el tile objetivo al construirlo.
+function buscarVecinoRioSinPuente(
+  origen: Coord,
+  tilesPorClave: Map<string, TileBioma>,
+  puentes: Map<string, Coord>
+): TileBioma | undefined {
+  for (const d of Object.values(BORDE_DELTA)) {
+    const vecino = tilesPorClave.get(claveCoord({ x: origen.x + d.x, y: origen.y + d.y }));
+    if (vecino?.tipo === 'rio' && !puentes.has(claveCoord(vecino))) return vecino;
+  }
+  return undefined;
+}
+
+// Para "Colocar cuerda": si el jugador está sobre una montaña, busca un
+// vecino que NO sea montaña (el lado "suelo" al que se baja); si está en
+// tierra, busca un vecino que SÍ sea montaña (el lado "montaña" al que se
+// sube). "Al lado" usa las 8 direcciones (vecinos), no solo cardinales — una
+// montaña es un área, no una arista fina como el río.
+function buscarParParaCuerda(
+  origen: TileBioma,
+  tilesPorClave: Map<string, TileBioma>
+): CuerdaConstruida | undefined {
+  if (origen.tipo === 'montana') {
+    for (const v of vecinos(origen)) {
+      const vecino = tilesPorClave.get(claveCoord(v));
+      if (vecino && vecino.tipo !== 'montana') return { suelo: vecino, montana: origen };
+    }
+    return undefined;
+  }
+  for (const v of vecinos(origen)) {
+    const vecino = tilesPorClave.get(claveCoord(v));
+    if (vecino?.tipo === 'montana') return { suelo: origen, montana: vecino };
+  }
+  return undefined;
+}
+
+function buscarCuerdaPorSuelo(cuerdas: CuerdaConstruida[], coord: Coord): CuerdaConstruida | undefined {
+  return cuerdas.find((c) => coordsIguales(c.suelo, coord));
+}
+
+function buscarCuerdaPorMontana(cuerdas: CuerdaConstruida[], coord: Coord): CuerdaConstruida | undefined {
+  return cuerdas.find((c) => coordsIguales(c.montana, coord));
+}
+
 export default function PantallaJuego({ session }: { session: Session }) {
   const [progreso, setProgreso] = useState<ProgresoJugador | null>(null);
   const [bioma, setBioma] = useState<Bioma | null>(null);
@@ -532,8 +678,13 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const [inventario, setInventario] = useState<InventarioItem[]>([]);
   const [cofresAbiertos, setCofresAbiertos] = useState<Map<string, Coord>>(new Map());
   const [recursosRecolectados, setRecursosRecolectados] = useState<Map<string, Coord>>(new Map());
+  const [puentesConstruidos, setPuentesConstruidos] = useState<Map<string, Coord>>(new Map());
+  const [cuerdasConstruidas, setCuerdasConstruidas] = useState<CuerdaConstruida[]>([]);
   const [inventarioVisible, setInventarioVisible] = useState(false);
+  const [crafteoVisible, setCrafteoVisible] = useState(false);
+  const [resetVisible, setResetVisible] = useState(false);
   const [mensajeAccion, setMensajeAccion] = useState<string | null>(null);
+  const [golpeCactus, setGolpeCactus] = useState(false);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -571,6 +722,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const rafIdRef = useRef<number | null>(null);
   const sinCaminoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mensajeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const golpeCactusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     cameraOffsetRef.current = cameraOffset;
@@ -591,6 +743,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
       if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
       if (sinCaminoTimeoutRef.current) clearTimeout(sinCaminoTimeoutRef.current);
       if (mensajeTimeoutRef.current) clearTimeout(mensajeTimeoutRef.current);
+      if (golpeCactusTimeoutRef.current) clearTimeout(golpeCactusTimeoutRef.current);
     };
   }, []);
 
@@ -656,10 +809,11 @@ export default function PantallaJuego({ session }: { session: Session }) {
     actuales: Map<string, Coord>,
     centro: Coord,
     tilesPorClaveBioma: Map<string, TileBioma>,
-    radio: number = RADIO_VISION_DEFAULT
+    radio: number = RADIO_VISION_DEFAULT,
+    esTransitableFn: (tile: TileBioma) => boolean = crearEsTransitableJugador(puentesConstruidos)
   ): Map<string, Coord> {
     const resultado = new Map(actuales);
-    for (const c of tilesAlcanzables(centro, radio, tilesPorClaveBioma)) {
+    for (const c of tilesAlcanzables(centro, radio, tilesPorClaveBioma, esTransitableFn)) {
       resultado.set(claveCoord(c), c);
     }
     return resultado;
@@ -676,6 +830,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
         .maybeSingle();
       if (errProgreso) throw errProgreso;
 
+      const esJugadorNuevo = !progresoData;
       if (!progresoData) {
         const { data: biomaInicial, error: errBioma } = await supabase
           .from('biomas')
@@ -730,7 +885,16 @@ export default function PantallaJuego({ session }: { session: Session }) {
       const tilesPorClaveInicial = new Map<string, TileBioma>(
         biomaData.tiles.tiles.map((t: TileBioma) => [claveCoord(t), t])
       );
-      const reveladas = fusionarDescubiertas(previas, posicionActual, tilesPorClaveInicial);
+      const puentesTempranos = new Map<string, Coord>(
+        (descData?.puentes_construidos ?? []).map((c) => [claveCoord(c), c])
+      );
+      const reveladas = fusionarDescubiertas(
+        previas,
+        posicionActual,
+        tilesPorClaveInicial,
+        RADIO_VISION_DEFAULT,
+        crearEsTransitableJugador(puentesTempranos)
+      );
 
       let descFinal: DescubrimientoJugador;
       if (descData) {
@@ -763,6 +927,10 @@ export default function PantallaJuego({ session }: { session: Session }) {
       const recursosIniciales = new Map<string, Coord>(
         (descFinal.recursos_recolectados ?? []).map((c) => [claveCoord(c), c])
       );
+      const puentesIniciales = new Map<string, Coord>(
+        (descFinal.puentes_construidos ?? []).map((c) => [claveCoord(c), c])
+      );
+      const cuerdasIniciales = descFinal.cuerdas_construidas ?? [];
 
       const { data: objetosData, error: errObjetos } = await supabase.from('objetos').select('*');
       if (errObjetos) throw errObjetos;
@@ -774,6 +942,21 @@ export default function PantallaJuego({ session }: { session: Session }) {
         .eq('usuario_id', session.user.id);
       if (errInventario) throw errInventario;
 
+      // Todo jugador nuevo arranca con un Hacha en el inventario.
+      let inventarioFinal = inventarioData ?? [];
+      if (esJugadorNuevo) {
+        const hacha = Array.from(catalogo.values()).find((o) => o.nombre === 'Hacha');
+        if (hacha) {
+          const { data: hachaInicial, error: errHacha } = await supabase
+            .from('inventario_jugador')
+            .insert({ usuario_id: session.user.id, objeto_id: hacha.id, usos_restantes: USOS_INICIALES_HERRAMIENTA })
+            .select()
+            .single();
+          if (errHacha) throw errHacha;
+          inventarioFinal = [...inventarioFinal, hachaInicial];
+        }
+      }
+
       const posicionInicial: Coord = { x: progresoData.posicion_q, y: progresoData.posicion_r };
       posicionVisualRef.current = posicionInicial;
       descubiertasRef.current = reveladas;
@@ -784,8 +967,10 @@ export default function PantallaJuego({ session }: { session: Session }) {
       setPosicionVisual(posicionInicial);
       setCofresAbiertos(cofresIniciales);
       setRecursosRecolectados(recursosIniciales);
+      setPuentesConstruidos(puentesIniciales);
+      setCuerdasConstruidas(cuerdasIniciales);
       setCatalogoObjetos(catalogo);
-      setInventario(inventarioData ?? []);
+      setInventario(inventarioFinal);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error desconocido al cargar la partida.');
     } finally {
@@ -806,7 +991,6 @@ export default function PantallaJuego({ session }: { session: Session }) {
   function animarPaso(destino: Coord, alTerminar: () => void) {
     const origen = posicionVisualRef.current;
     const inicio = Date.now();
-    console.log('[MOV] animarPaso: arranca', { origen, destino, rafIdPrevio: rafIdRef.current });
 
     function frame() {
       const t = Math.min((Date.now() - inicio) / DURACION_PASO_MS, 1);
@@ -822,7 +1006,6 @@ export default function PantallaJuego({ session }: { session: Session }) {
         rafIdRef.current = requestAnimationFrame(frame);
       } else {
         rafIdRef.current = null;
-        console.log('[MOV] animarPaso: termina', { destino });
         alTerminar();
       }
     }
@@ -834,20 +1017,17 @@ export default function PantallaJuego({ session }: { session: Session }) {
   // Supabase (fire-and-forget) y sigue con el próximo paso de la cola, si
   // quedó alguno tras un posible redirect.
   function completarPaso(destinoPaso: Coord) {
-    console.log('[MOV] completarPaso: inicio', {
-      destinoPaso,
-      bioma: !!bioma,
-      colaAntes: [...colaRef.current],
-      progresoRefActual: progresoRef.current && {
-        posicion_q: progresoRef.current.posicion_q,
-        posicion_r: progresoRef.current.posicion_r,
-      },
-    });
-    if (!bioma) {
-      console.log('[MOV] completarPaso: ABORTA por !bioma');
+    if (!bioma) return;
+    const tileDestino = tilesPorClave.get(claveCoord(destinoPaso));
+
+    if (tileDestino?.tipo === 'cactus') {
+      const casillaAnterior = progresoRef.current
+        ? { x: progresoRef.current.posicion_q, y: progresoRef.current.posicion_r }
+        : destinoPaso;
+      golpearCactus(casillaAnterior);
       return;
     }
-    const tileDestino = tilesPorClave.get(claveCoord(destinoPaso));
+
     const radio = tileDestino?.tipo === 'montana' ? RADIO_VISION_MONTANA : RADIO_VISION_DEFAULT;
 
     const actualizadas = fusionarDescubiertas(descubiertasRef.current, destinoPaso, tilesPorClave, radio);
@@ -881,7 +1061,6 @@ export default function PantallaJuego({ session }: { session: Session }) {
     }
 
     colaRef.current.shift();
-    console.log('[MOV] completarPaso: fin', { colaDespues: [...colaRef.current] });
     if (colaRef.current.length > 0) {
       ejecutarSiguientePaso();
     } else {
@@ -889,13 +1068,41 @@ export default function PantallaJuego({ session }: { session: Session }) {
     }
   }
 
+  // Tocar un cactus resta vida y hace retroceder al jugador a la casilla
+  // anterior en vez de asentarlo ahí — corta cualquier paso encolado (no
+  // tiene sentido seguir un camino que pasaba por el cactus) y rebota la
+  // animación de vuelta.
+  function golpearCactus(casillaAnterior: Coord) {
+    colaRef.current = [];
+    setGolpeCactus(true);
+    if (golpeCactusTimeoutRef.current) clearTimeout(golpeCactusTimeoutRef.current);
+    golpeCactusTimeoutRef.current = setTimeout(() => setGolpeCactus(false), GOLPE_CACTUS_MS);
+    mostrarMensaje(`-${DANO_CACTUS} vida (cactus)`);
+
+    const progresoActual = progresoRef.current;
+    if (progresoActual) {
+      const vidaNueva = Math.max(0, progresoActual.vida_actual - DANO_CACTUS);
+      const progresoActualizado = { ...progresoActual, vida_actual: vidaNueva };
+      progresoRef.current = progresoActualizado;
+      setProgreso(progresoActualizado);
+      supabase
+        .from('progreso_jugador')
+        .update({ vida_actual: vidaNueva })
+        .eq('id', progresoActualizado.id)
+        .then(({ error: errVida }) => {
+          if (errVida) setError(errVida.message);
+        });
+    }
+
+    // La animación de ida ya había llegado al cactus (completarPaso corre
+    // después de que animarPaso termina) — rebota de vuelta a la casilla
+    // anterior en vez de seguir la cola.
+    animarPaso(casillaAnterior, () => setCaminando(false));
+  }
+
   function ejecutarSiguientePaso() {
     const destino = colaRef.current[0];
-    console.log('[MOV] ejecutarSiguientePaso', { destino, cola: [...colaRef.current] });
-    if (!destino) {
-      console.log('[MOV] ejecutarSiguientePaso: ABORTA, cola vacia');
-      return;
-    }
+    if (!destino) return;
     animarPaso(destino, () => completarPaso(destino));
   }
 
@@ -905,46 +1112,39 @@ export default function PantallaJuego({ session }: { session: Session }) {
   // se interrumpe, el nuevo tramo simplemente continúa desde ahí en cuanto
   // ese paso termine.
   function iniciarCaminoHacia(destino: Coord) {
-    console.log('[MOV] iniciarCaminoHacia: tap', {
-      destino,
-      progreso: progreso && { posicion_q: progreso.posicion_q, posicion_r: progreso.posicion_r },
-      colaActual: [...colaRef.current],
-      caminando,
-    });
-    if (!progreso || !bioma) {
-      console.log('[MOV] iniciarCaminoHacia: ABORTA por !progreso/!bioma');
-      return;
-    }
+    if (!progreso || !bioma) return;
     // Gate de niebla: antes vivía en el onPress condicional del Polygon;
     // ahora que el tap se detecta por geometría (Gesture.Tap), tiene que
     // vivir acá para que cualquier llamador quede protegido igual.
-    if (!descubiertas.has(claveCoord(destino))) {
-      console.log('[MOV] iniciarCaminoHacia: ABORTA, destino en niebla');
-      return;
-    }
+    if (!descubiertas.has(claveCoord(destino))) return;
 
     const enCaminoActual = colaRef.current.length > 0;
     const origenPlanificacion = enCaminoActual ? colaRef.current[0] : { x: progreso.posicion_q, y: progreso.posicion_r };
 
-    const tramoNuevo = encontrarCamino(origenPlanificacion, destino, tilesPorClave);
-    console.log('[MOV] iniciarCaminoHacia: resultado BFS', { origenPlanificacion, destino, enCaminoActual, tramoNuevo });
+    // Escalando montaña (parado sobre un tile 'montana'): el movimiento
+    // normal por tap queda restringido a las montañas colindantes — no se
+    // puede "bajar" por tap, solo con el botón Bajar montaña en un punto de
+    // cuerda. A nivel de suelo, la transitabilidad normal (que nunca incluye
+    // montaña salvo puente) sigue aplicando.
+    const tileOrigenPlanificacion = tilesPorClave.get(claveCoord(origenPlanificacion));
+    const predicadoMovimiento =
+      tileOrigenPlanificacion?.tipo === 'montana'
+        ? (t: TileBioma) => t.tipo === 'montana'
+        : crearEsTransitableJugador(puentesConstruidos);
+
+    const tramoNuevo = encontrarCamino(origenPlanificacion, destino, tilesPorClave, predicadoMovimiento);
     if (tramoNuevo === null) {
-      console.log('[MOV] iniciarCaminoHacia: sin camino, muestra flash');
       mostrarSinCamino(destino);
       return;
     }
 
     if (enCaminoActual) {
       colaRef.current = [colaRef.current[0], ...tramoNuevo];
-      console.log('[MOV] iniciarCaminoHacia: redirect aplicado', { colaNueva: [...colaRef.current] });
     } else {
       colaRef.current = tramoNuevo;
       if (colaRef.current.length > 0) {
         setCaminando(true);
-        console.log('[MOV] iniciarCaminoHacia: arranca camino nuevo', { cola: [...colaRef.current] });
         ejecutarSiguientePaso();
-      } else {
-        console.log('[MOV] iniciarCaminoHacia: tramo vacio (ya esta ahi), no hace nada');
       }
     }
   }
@@ -971,15 +1171,41 @@ export default function PantallaJuego({ session }: { session: Session }) {
     [inventario, catalogoObjetos]
   );
 
-  const inventarioAgrupado = useMemo(() => {
-    const conteo = new Map<string, number>();
+  const tieneBancoDeTrabajo = useMemo(
+    () => calcularTieneBancoDeTrabajo(inventario, catalogoObjetos),
+    [inventario, catalogoObjetos]
+  );
+
+  // Filas para el modal de Inventario: los objetos con durabilidad (Hacha/
+  // Pico) se listan uno por uno, con su contador de usos — el resto se
+  // agrupa por cantidad como antes.
+  interface FilaInventario {
+    key: string;
+    nombre: string;
+    cantidad: number;
+    usosRestantes?: number;
+  }
+  const filasInventario = useMemo<FilaInventario[]>(() => {
+    const conteoSimple = new Map<string, number>();
+    const conDurabilidad: { id: string; nombre: string; usosRestantes: number }[] = [];
     for (const item of inventario) {
-      conteo.set(item.objeto_id, (conteo.get(item.objeto_id) ?? 0) + 1);
+      const objeto = catalogoObjetos.get(item.objeto_id);
+      if (!objeto) continue;
+      if (item.usos_restantes !== null && item.usos_restantes !== undefined) {
+        conDurabilidad.push({ id: item.id, nombre: objeto.nombre, usosRestantes: item.usos_restantes });
+      } else {
+        conteoSimple.set(objeto.nombre, (conteoSimple.get(objeto.nombre) ?? 0) + 1);
+      }
     }
-    return Array.from(conteo.entries())
-      .map(([objetoId, cantidad]) => ({ objeto: catalogoObjetos.get(objetoId), cantidad }))
-      .filter((it): it is { objeto: Objeto; cantidad: number } => it.objeto !== undefined)
-      .sort((a, b) => a.objeto.nombre.localeCompare(b.objeto.nombre));
+    const filas: FilaInventario[] = Array.from(conteoSimple.entries()).map(([nombre, cantidad]) => ({
+      key: nombre,
+      nombre,
+      cantidad,
+    }));
+    for (const item of conDurabilidad) {
+      filas.push({ key: item.id, nombre: item.nombre, cantidad: 1, usosRestantes: item.usosRestantes });
+    }
+    return filas.sort((a, b) => a.nombre.localeCompare(b.nombre));
   }, [inventario, catalogoObjetos]);
 
   async function abrirCofre() {
@@ -988,7 +1214,18 @@ export default function PantallaJuego({ session }: { session: Session }) {
     if (cofresAbiertos.has(clave)) return;
 
     const { objetoId, cantidad } = tileActual.cofre;
-    const filas = Array.from({ length: cantidad }, () => ({ usuario_id: session.user.id, objeto_id: objetoId }));
+    const objeto = catalogoObjetos.get(objetoId);
+    if (objeto && !hayEspacioPara(inventario, catalogoObjetos, objeto.nombre, cantidad)) {
+      mostrarMensaje(`Inventario lleno de ${objeto.nombre}`);
+      return;
+    }
+
+    const esDurable = objeto ? HERRAMIENTAS_CON_DURABILIDAD.has(objeto.nombre) : false;
+    const filas = Array.from({ length: cantidad }, () => ({
+      usuario_id: session.user.id,
+      objeto_id: objetoId,
+      usos_restantes: esDurable ? USOS_INICIALES_HERRAMIENTA : null,
+    }));
 
     const { data: filasInsertadas, error: errInv } = await supabase
       .from('inventario_jugador')
@@ -1004,7 +1241,6 @@ export default function PantallaJuego({ session }: { session: Session }) {
     setCofresAbiertos(nuevosAbiertos);
     setInventario((actual) => [...actual, ...(filasInsertadas ?? [])]);
 
-    const objeto = catalogoObjetos.get(objetoId);
     mostrarMensaje(`+${cantidad} ${objeto?.nombre ?? 'objeto'}`);
 
     const { error: errDesc } = await supabase
@@ -1025,9 +1261,24 @@ export default function PantallaJuego({ session }: { session: Session }) {
     const objeto = objetoParaRecurso(catalogoObjetos, recurso);
     if (!objeto) return;
 
+    if (!hayEspacioPara(inventario, catalogoObjetos, objeto.nombre)) {
+      mostrarMensaje(`Inventario lleno de ${objeto.nombre}`);
+      return;
+    }
+
+    // Herramienta con durabilidad usada para recolectar este recurso (Hacha
+    // -> madera, Pico -> piedra), si el recurso tiene una asociada — se
+    // decrementa 1 uso de una instancia cualquiera del jugador. Lana no
+    // tiene herramienta con durabilidad (Tijeras no se gasta).
+    const herramienta = herramientaParaRecurso(catalogoObjetos, recurso);
+    const instanciaHerramienta =
+      herramienta && HERRAMIENTAS_CON_DURABILIDAD.has(herramienta.nombre)
+        ? inventario.find((item) => item.objeto_id === herramienta.id && (item.usos_restantes ?? 0) > 0)
+        : undefined;
+
     const { data, error: errInv } = await supabase
       .from('inventario_jugador')
-      .insert({ usuario_id: session.user.id, objeto_id: objeto.id })
+      .insert({ usuario_id: session.user.id, objeto_id: objeto.id, usos_restantes: null })
       .select()
       .single();
     if (errInv) {
@@ -1046,6 +1297,278 @@ export default function PantallaJuego({ session }: { session: Session }) {
       .update({ recursos_recolectados: Array.from(nuevos.values()) })
       .eq('id', descubrimientoId);
     if (errDesc) setError(errDesc.message);
+
+    if (instanciaHerramienta) {
+      await descontarUsoHerramienta(instanciaHerramienta, herramienta!.nombre);
+    }
+  }
+
+  // Descuenta 1 uso de una instancia de herramienta con durabilidad
+  // (Hacha/Pico). Avisa al llegar a 1 uso restante y rompe/borra la
+  // herramienta del inventario al llegar a 0.
+  async function descontarUsoHerramienta(instancia: InventarioItem, nombreHerramienta: string) {
+    const usosNuevos = (instancia.usos_restantes ?? 1) - 1;
+
+    if (usosNuevos <= 0) {
+      setInventario((actual) => actual.filter((item) => item.id !== instancia.id));
+      mostrarMensaje(`Tu ${nombreHerramienta.toLowerCase()} se rompió y desapareció.`);
+      const { error: errDelete } = await supabase.from('inventario_jugador').delete().eq('id', instancia.id);
+      if (errDelete) setError(errDelete.message);
+      return;
+    }
+
+    setInventario((actual) =>
+      actual.map((item) => (item.id === instancia.id ? { ...item, usos_restantes: usosNuevos } : item))
+    );
+    if (usosNuevos === 1) {
+      mostrarMensaje(`Tu ${nombreHerramienta.toLowerCase()} está a punto de romperse (1 uso restante)`);
+    }
+    const { error: errUpdate } = await supabase
+      .from('inventario_jugador')
+      .update({ usos_restantes: usosNuevos })
+      .eq('id', instancia.id);
+    if (errUpdate) setError(errUpdate.message);
+  }
+
+  async function craftear(nombreObjeto: string) {
+    const receta = RECETAS_CRAFTEO.find((r) => r.nombreObjeto === nombreObjeto);
+    if (!receta || !tieneBancoDeTrabajo) return;
+    if (!hayEspacioPara(inventario, catalogoObjetos, nombreObjeto)) {
+      mostrarMensaje(`Inventario lleno de ${nombreObjeto}`);
+      return;
+    }
+    for (const { nombreMaterial, cantidad } of receta.costo) {
+      if (cantidadDeObjeto(inventario, catalogoObjetos, nombreMaterial) < cantidad) {
+        mostrarMensaje(`Te falta ${nombreMaterial}`);
+        return;
+      }
+    }
+    const objeto = Array.from(catalogoObjetos.values()).find((o) => o.nombre === nombreObjeto);
+    if (!objeto) return;
+
+    // Descuenta los materiales: borra `cantidad` filas por cada material de
+    // la receta (cualquiera de las que tenga el jugador de ese material).
+    const idsABorrar: string[] = [];
+    for (const { nombreMaterial, cantidad } of receta.costo) {
+      const instancias = inventario.filter((item) => catalogoObjetos.get(item.objeto_id)?.nombre === nombreMaterial);
+      idsABorrar.push(...instancias.slice(0, cantidad).map((item) => item.id));
+    }
+    const { error: errBorrar } = await supabase.from('inventario_jugador').delete().in('id', idsABorrar);
+    if (errBorrar) {
+      setError(errBorrar.message);
+      return;
+    }
+
+    const esDurable = HERRAMIENTAS_CON_DURABILIDAD.has(nombreObjeto);
+    const { data, error: errInv } = await supabase
+      .from('inventario_jugador')
+      .insert({
+        usuario_id: session.user.id,
+        objeto_id: objeto.id,
+        usos_restantes: esDurable ? USOS_INICIALES_HERRAMIENTA : null,
+      })
+      .select()
+      .single();
+    if (errInv) {
+      setError(errInv.message);
+      return;
+    }
+
+    setInventario((actual) => [...actual.filter((item) => !idsABorrar.includes(item.id)), data]);
+    mostrarMensaje(`Crafteaste ${nombreObjeto}`);
+  }
+
+  async function construirPuente() {
+    if (!progreso || !descubrimientoId || !tieneBancoDeTrabajo) return;
+    const origen = { x: progreso.posicion_q, y: progreso.posicion_r };
+    const objetivo = buscarVecinoRioSinPuente(origen, tilesPorClave, puentesConstruidos);
+    if (!objetivo) return;
+    if (cantidadDeObjeto(inventario, catalogoObjetos, 'Madera') < COSTO_PUENTE_MADERA) return;
+
+    const madera = Array.from(catalogoObjetos.values()).find((o) => o.nombre === 'Madera');
+    if (!madera) return;
+    const idsABorrar = inventario
+      .filter((item) => item.objeto_id === madera.id)
+      .slice(0, COSTO_PUENTE_MADERA)
+      .map((item) => item.id);
+
+    const { error: errBorrar } = await supabase.from('inventario_jugador').delete().in('id', idsABorrar);
+    if (errBorrar) {
+      setError(errBorrar.message);
+      return;
+    }
+    setInventario((actual) => actual.filter((item) => !idsABorrar.includes(item.id)));
+
+    const nuevosPuentes = new Map(puentesConstruidos);
+    nuevosPuentes.set(claveCoord(objetivo), objetivo);
+    setPuentesConstruidos(nuevosPuentes);
+    mostrarMensaje('Puente construido');
+
+    const { error: errPuentes } = await supabase
+      .from('descubrimiento_jugador')
+      .update({ puentes_construidos: Array.from(nuevosPuentes.values()) })
+      .eq('id', descubrimientoId);
+    if (errPuentes) setError(errPuentes.message);
+
+    // Revela lo que quede visible del otro lado del río recién puenteado.
+    const actualizadas = fusionarDescubiertas(
+      descubiertasRef.current,
+      origen,
+      tilesPorClave,
+      RADIO_VISION_DEFAULT,
+      crearEsTransitableJugador(nuevosPuentes)
+    );
+    if (actualizadas.size !== descubiertasRef.current.size) {
+      descubiertasRef.current = actualizadas;
+      setDescubiertas(actualizadas);
+      const { error: errDesc } = await supabase
+        .from('descubrimiento_jugador')
+        .update({ casillas_descubiertas: Array.from(actualizadas.values()) })
+        .eq('id', descubrimientoId);
+      if (errDesc) setError(errDesc.message);
+    }
+  }
+
+  async function colocarCuerda() {
+    if (!progreso || !descubrimientoId || !tileActual) return;
+    const par = buscarParParaCuerda(tileActual, tilesPorClave);
+    if (!par) return;
+    if (cuerdasConstruidas.some((c) => coordsIguales(c.suelo, par.suelo) && coordsIguales(c.montana, par.montana))) return;
+
+    const cuerdaObjeto = Array.from(catalogoObjetos.values()).find((o) => o.nombre === 'Cuerda');
+    const instancia = cuerdaObjeto ? inventario.find((item) => item.objeto_id === cuerdaObjeto.id) : undefined;
+    if (!instancia) return;
+
+    const { error: errBorrar } = await supabase.from('inventario_jugador').delete().eq('id', instancia.id);
+    if (errBorrar) {
+      setError(errBorrar.message);
+      return;
+    }
+    setInventario((actual) => actual.filter((item) => item.id !== instancia.id));
+
+    const nuevasCuerdas = [...cuerdasConstruidas, par];
+    setCuerdasConstruidas(nuevasCuerdas);
+    mostrarMensaje('Cuerda colocada');
+
+    const { error: errCuerdas } = await supabase
+      .from('descubrimiento_jugador')
+      .update({ cuerdas_construidas: nuevasCuerdas })
+      .eq('id', descubrimientoId);
+    if (errCuerdas) setError(errCuerdas.message);
+  }
+
+  // Subir/bajar son un solo paso: reusan la misma cola/animación que el
+  // movimiento normal en vez de código nuevo (ver ejecutarSiguientePaso).
+  function subirMontana() {
+    if (!tileActual || caminando) return;
+    const cuerda = buscarCuerdaPorSuelo(cuerdasConstruidas, tileActual);
+    if (!cuerda) return;
+    colaRef.current = [cuerda.montana];
+    setCaminando(true);
+    ejecutarSiguientePaso();
+  }
+
+  function bajarMontana() {
+    if (!tileActual || caminando) return;
+    const cuerda = buscarCuerdaPorMontana(cuerdasConstruidas, tileActual);
+    if (!cuerda) return;
+    colaRef.current = [cuerda.suelo];
+    setCaminando(true);
+    ejecutarSiguientePaso();
+  }
+
+  // La Poción restaura la vida al máximo y se consume al usarla.
+  async function usarPocion() {
+    if (!progreso) return;
+    const pocionObjeto = Array.from(catalogoObjetos.values()).find((o) => o.nombre === 'Poción');
+    const instancia = pocionObjeto ? inventario.find((item) => item.objeto_id === pocionObjeto.id) : undefined;
+    if (!instancia) return;
+
+    const { error: errBorrar } = await supabase.from('inventario_jugador').delete().eq('id', instancia.id);
+    if (errBorrar) {
+      setError(errBorrar.message);
+      return;
+    }
+    setInventario((actual) => actual.filter((item) => item.id !== instancia.id));
+
+    const progresoActualizado = { ...progreso, vida_actual: VIDA_MAXIMA };
+    progresoRef.current = progresoActualizado;
+    setProgreso(progresoActualizado);
+    mostrarMensaje('Vida restaurada');
+
+    const { error: errVida } = await supabase
+      .from('progreso_jugador')
+      .update({ vida_actual: VIDA_MAXIMA })
+      .eq('id', progreso.id);
+    if (errVida) setError(errVida.message);
+  }
+
+  // Reinicia el nivel desde cero: borra todo el inventario (salvo un Hacha
+  // nueva, con la que el jugador siempre arranca), vuelve al spawn con la
+  // vida al máximo, y resetea todo lo descubierto/crafteado (niebla, cofres
+  // abiertos, recursos recolectados, puentes y cuerdas construidos) — al
+  // vaciarse el inventario, lo crafteado con él queda reseteado también.
+  async function resetearNivel() {
+    setResetVisible(false);
+    if (!progreso || !bioma || !descubrimientoId) return;
+
+    const idsABorrar = inventario.map((item) => item.id);
+    if (idsABorrar.length > 0) {
+      const { error: errBorrar } = await supabase.from('inventario_jugador').delete().in('id', idsABorrar);
+      if (errBorrar) {
+        setError(errBorrar.message);
+        return;
+      }
+    }
+
+    let inventarioNuevo: InventarioItem[] = [];
+    const hacha = Array.from(catalogoObjetos.values()).find((o) => o.nombre === 'Hacha');
+    if (hacha) {
+      const { data: hachaInicial, error: errHacha } = await supabase
+        .from('inventario_jugador')
+        .insert({ usuario_id: session.user.id, objeto_id: hacha.id, usos_restantes: USOS_INICIALES_HERRAMIENTA })
+        .select()
+        .single();
+      if (errHacha) {
+        setError(errHacha.message);
+        return;
+      }
+      inventarioNuevo = [hachaInicial];
+    }
+    setInventario(inventarioNuevo);
+
+    const spawn = bioma.tiles.spawn;
+    const progresoActualizado = { ...progreso, posicion_q: spawn.x, posicion_r: spawn.y, vida_actual: VIDA_MAXIMA };
+    progresoRef.current = progresoActualizado;
+    posicionVisualRef.current = spawn;
+    setProgreso(progresoActualizado);
+    setPosicionVisual(spawn);
+    const { error: errProgreso } = await supabase
+      .from('progreso_jugador')
+      .update({ posicion_q: spawn.x, posicion_r: spawn.y, vida_actual: VIDA_MAXIMA })
+      .eq('id', progreso.id);
+    if (errProgreso) setError(errProgreso.message);
+
+    setCofresAbiertos(new Map());
+    setRecursosRecolectados(new Map());
+    setPuentesConstruidos(new Map());
+    setCuerdasConstruidas([]);
+    const reveladas = fusionarDescubiertas(new Map(), spawn, tilesPorClave, RADIO_VISION_DEFAULT, crearEsTransitableJugador(new Map()));
+    descubiertasRef.current = reveladas;
+    setDescubiertas(reveladas);
+    const { error: errDesc } = await supabase
+      .from('descubrimiento_jugador')
+      .update({
+        casillas_descubiertas: Array.from(reveladas.values()),
+        cofres_abiertos: [],
+        recursos_recolectados: [],
+        puentes_construidos: [],
+        cuerdas_construidas: [],
+      })
+      .eq('id', descubrimientoId);
+    if (errDesc) setError(errDesc.message);
+
+    mostrarMensaje('Nivel reiniciado');
   }
 
   const limitesBioma = useMemo<LimitesBioma | null>(() => {
@@ -1262,6 +1785,36 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const herramientaFaltante =
     tileActual?.recurso && !recursoHabilitado ? herramientaParaRecurso(catalogoObjetos, tileActual.recurso) : undefined;
 
+  // "Construir puente" solo aparece si el jugador está parado justo al lado
+  // de un río sin puente, y además tiene banco de trabajo y suficiente
+  // madera.
+  const vecinoRioParaPuente =
+    !caminando && tileActual ? buscarVecinoRioSinPuente(tileActual, tilesPorClave, puentesConstruidos) : undefined;
+  const mostrarBotonPuente =
+    !!vecinoRioParaPuente &&
+    tieneBancoDeTrabajo &&
+    cantidadDeObjeto(inventario, catalogoObjetos, 'Madera') >= COSTO_PUENTE_MADERA;
+
+  // "Colocar cuerda": al lado o encima de una montaña, con al menos 1
+  // Cuerda en el inventario, y sin que ya exista una cuerda idéntica ahí.
+  const parCuerdaNuevo = !caminando && tileActual ? buscarParParaCuerda(tileActual, tilesPorClave) : undefined;
+  const yaHayCuerdaAqui =
+    !!parCuerdaNuevo &&
+    cuerdasConstruidas.some(
+      (c) => coordsIguales(c.suelo, parCuerdaNuevo.suelo) && coordsIguales(c.montana, parCuerdaNuevo.montana)
+    );
+  const mostrarBotonColocarCuerda =
+    !!parCuerdaNuevo && !yaHayCuerdaAqui && cantidadDeObjeto(inventario, catalogoObjetos, 'Cuerda') >= 1;
+
+  // "Subir montaña": parado justo en el lado "suelo" de una cuerda ya
+  // colocada. "Bajar montaña": parado en el lado "montaña" de cualquier
+  // cuerda (no necesariamente la misma por la que subió).
+  const cuerdaParaSubir = !caminando && tileActual ? buscarCuerdaPorSuelo(cuerdasConstruidas, tileActual) : undefined;
+  const mostrarBotonSubir = !!cuerdaParaSubir;
+  const cuerdaParaBajar =
+    !caminando && tileActual?.tipo === 'montana' ? buscarCuerdaPorMontana(cuerdasConstruidas, tileActual) : undefined;
+  const mostrarBotonBajar = !!cuerdaParaBajar;
+
   // Río revertido a relleno plano — ver comentario en el render del Svg más
   // abajo. Se dejan sin usar (no se borran) como referencia para retomar.
   // const tileRevelado = (t: TileBioma) => DEBUG_SIN_FOG || descubiertas.has(claveCoord(t));
@@ -1276,10 +1829,21 @@ export default function PantallaJuego({ session }: { session: Session }) {
           <Text style={styles.subtitulo}>
             Nivel {progreso.nivel} · Fuerza {progreso.fuerza}
           </Text>
+          <Text style={styles.subtitulo}>
+            Vida: {progreso.vida_actual}/{VIDA_MAXIMA}
+          </Text>
         </View>
         <View style={styles.accionesEncabezado}>
           <TouchableOpacity onPress={() => setInventarioVisible(true)}>
             <Text style={styles.enlace}>Inventario ({inventario.length})</Text>
+          </TouchableOpacity>
+          {tieneBancoDeTrabajo && (
+            <TouchableOpacity onPress={() => setCrafteoVisible(true)}>
+              <Text style={styles.enlace}>Crear</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity onPress={() => setResetVisible(true)}>
+            <Text style={styles.enlace}>Reiniciar nivel</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={() => supabase.auth.signOut()}>
             <Text style={styles.enlace}>Cerrar sesión</Text>
@@ -1297,18 +1861,82 @@ export default function PantallaJuego({ session }: { session: Session }) {
         <View style={styles.modalFondo}>
           <View style={styles.modalContenido}>
             <Text style={styles.modalTitulo}>Inventario</Text>
-            {inventarioAgrupado.length === 0 ? (
+            {filasInventario.length === 0 ? (
               <Text style={styles.modalVacio}>Todavía no tenés objetos.</Text>
             ) : (
-              inventarioAgrupado.map(({ objeto, cantidad }) => (
-                <View key={objeto.id} style={styles.modalFila}>
-                  <Text style={styles.modalObjetoNombre}>{objeto.nombre}</Text>
-                  <Text style={styles.modalObjetoCantidad}>x{cantidad}</Text>
+              filasInventario.map((fila) => (
+                <View key={fila.key} style={styles.modalFila}>
+                  <Text style={styles.modalObjetoNombre}>{fila.nombre}</Text>
+                  <Text style={styles.modalObjetoCantidad}>
+                    {fila.usosRestantes !== undefined ? `${fila.usosRestantes} usos` : `x${fila.cantidad}`}
+                  </Text>
+                  {fila.nombre === 'Poción' && (
+                    <TouchableOpacity style={styles.boton} onPress={usarPocion}>
+                      <Text style={styles.botonTexto}>Usar</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               ))
             )}
             <TouchableOpacity style={styles.boton} onPress={() => setInventarioVisible(false)}>
               <Text style={styles.botonTexto}>Cerrar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={crafteoVisible} transparent animationType="fade" onRequestClose={() => setCrafteoVisible(false)}>
+        <View style={styles.modalFondo}>
+          <View style={styles.modalContenido}>
+            <Text style={styles.modalTitulo}>Crear (banco de trabajo)</Text>
+            {RECETAS_CRAFTEO.map((receta) => {
+              const tope = topeInventario(receta.nombreObjeto);
+              const cantidadActual = cantidadDeObjeto(inventario, catalogoObjetos, receta.nombreObjeto);
+              const alTope = tope !== null && cantidadActual >= tope;
+              const faltaMaterial = receta.costo.some(
+                ({ nombreMaterial, cantidad }) => cantidadDeObjeto(inventario, catalogoObjetos, nombreMaterial) < cantidad
+              );
+              const deshabilitado = alTope || faltaMaterial;
+              const textoCosto = receta.costo.map(({ nombreMaterial, cantidad }) => `${cantidad} ${nombreMaterial}`).join(' + ');
+              return (
+                <View key={receta.nombreObjeto} style={styles.modalFila}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.modalObjetoNombre}>{receta.nombreObjeto}</Text>
+                    <Text style={styles.textoFaltaHerramienta}>
+                      {textoCosto}
+                      {alTope ? ' · al tope' : ''}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={[styles.boton, deshabilitado && styles.botonDeshabilitado]}
+                    disabled={deshabilitado}
+                    onPress={() => craftear(receta.nombreObjeto)}
+                  >
+                    <Text style={styles.botonTexto}>Craftear</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+            <TouchableOpacity style={styles.boton} onPress={() => setCrafteoVisible(false)}>
+              <Text style={styles.botonTexto}>Cerrar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={resetVisible} transparent animationType="fade" onRequestClose={() => setResetVisible(false)}>
+        <View style={styles.modalFondo}>
+          <View style={styles.modalContenido}>
+            <Text style={styles.modalTitulo}>¿Reiniciar el nivel?</Text>
+            <Text style={styles.modalVacio}>
+              Volvés al punto de salida con la vida al máximo. Se borra todo el inventario y lo crafteado — solo
+              conservás un Hacha.
+            </Text>
+            <TouchableOpacity style={styles.boton} onPress={resetearNivel}>
+              <Text style={styles.botonTexto}>Sí, reiniciar</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.boton} onPress={() => setResetVisible(false)}>
+              <Text style={styles.botonTexto}>Cancelar</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1330,12 +1958,23 @@ export default function PantallaJuego({ session }: { session: Session }) {
               const sinCamino = casillaSinCamino === clave;
               const puntosPoligono = esquinasRombo(pixel.x, pixel.y, ANCHO_TILE - 3, ALTO_TILE - 3);
 
-              const relleno = revelada ? colorTile(tile.tipo) : '#1B2536';
+              const esPuenteTile = tile.tipo === 'rio' && puentesConstruidos.has(clave);
+              const cuerdaEnEsteMontana =
+                tile.tipo === 'montana' ? cuerdasConstruidas.find((c) => coordsIguales(c.montana, tile)) : undefined;
+              const relleno = revelada ? (esPuenteTile ? COLOR_PUENTE : colorTile(tile.tipo)) : '#1B2536';
               // Textura solo en tiles revelados — si se dibujara también en
               // niebla, la silueta (montaña, río) se filtraría a través del
               // fill oscuro de fog, que es una capa aparte con su propio alfa.
               const textura = revelada
-                ? texturaParaTile(tile, tilesPorClave, recursosRecolectados.has(clave), cofresAbiertos.has(clave))
+                ? esPuenteTile
+                  ? TEXTURA_PUENTE
+                  : texturaParaTile(
+                      tile,
+                      tilesPorClave,
+                      recursosRecolectados.has(clave),
+                      cofresAbiertos.has(clave),
+                      cuerdaEnEsteMontana
+                    )
                 : null;
 
               return (
@@ -1444,6 +2083,8 @@ export default function PantallaJuego({ session }: { session: Session }) {
             })()}
           </Svg>
 
+          {golpeCactus && <View pointerEvents="none" style={styles.flashDano} />}
+
           <TouchableOpacity style={styles.botonCentrar} onPress={() => setCameraOffset({ x: 0, y: 0 })}>
             <Text style={styles.botonCentrarTexto}>Centrar</Text>
           </TouchableOpacity>
@@ -1461,7 +2102,12 @@ export default function PantallaJuego({ session }: { session: Session }) {
         </View>
       </GestureDetector>
 
-      {(mostrarBotonCofre || mostrarBotonRecurso) && (
+      {(mostrarBotonCofre ||
+        mostrarBotonRecurso ||
+        mostrarBotonPuente ||
+        mostrarBotonColocarCuerda ||
+        mostrarBotonSubir ||
+        mostrarBotonBajar) && (
         <View style={styles.accionesTile}>
           {mostrarBotonCofre && (
             <TouchableOpacity style={styles.boton} onPress={abrirCofre}>
@@ -1483,6 +2129,26 @@ export default function PantallaJuego({ session }: { session: Session }) {
                 </Text>
               )}
             </View>
+          )}
+          {mostrarBotonPuente && (
+            <TouchableOpacity style={styles.boton} onPress={construirPuente}>
+              <Text style={styles.botonTexto}>Construir puente</Text>
+            </TouchableOpacity>
+          )}
+          {mostrarBotonColocarCuerda && (
+            <TouchableOpacity style={styles.boton} onPress={colocarCuerda}>
+              <Text style={styles.botonTexto}>Colocar cuerda</Text>
+            </TouchableOpacity>
+          )}
+          {mostrarBotonSubir && (
+            <TouchableOpacity style={styles.boton} onPress={subirMontana}>
+              <Text style={styles.botonTexto}>Subir montaña</Text>
+            </TouchableOpacity>
+          )}
+          {mostrarBotonBajar && (
+            <TouchableOpacity style={styles.boton} onPress={bajarMontana}>
+              <Text style={styles.botonTexto}>Bajar montaña</Text>
+            </TouchableOpacity>
           )}
         </View>
       )}
@@ -1612,6 +2278,14 @@ const styles = StyleSheet.create({
     color: '#7BC96F',
     fontWeight: '700',
     fontSize: 13,
+  },
+  flashDano: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(220, 38, 38, 0.35)',
   },
   accionesTile: {
     flexDirection: 'row',

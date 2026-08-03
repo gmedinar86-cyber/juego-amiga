@@ -210,22 +210,18 @@ const TEXTURA_MONTANA_CUERDA_2 = conBaseEnVertice(
 
 const TEXTURA_PUENTE = conAlturaExtra(crearTextura(require('../assets/entorno/puente-madera.png'), 600, 466));
 
-// Variedad en 'montana': hash determinístico por coordenada del propio tile
-// (no Math.random(), para que no titile en cada render) — 60% montaña rocosa,
-// 20% árbol seco, 20% cactus, como acento disperso en vez de franjas parejas.
-// Si el tile tiene una cuerda colocada, eso pisa la variedad normal: se elige
-// la variante según el LADO real por el que sale la cuerda (hacia dónde
-// queda el punto "suelo" respecto a esta montaña en pantalla), no al azar —
-// rope-1 sale por la izquierda, rope-2 por la derecha.
+// Mapa fijo diseñado a mano: todas las 'montana' usan la misma textura, sin
+// variedad aleatoria (la mezcla con dead-tree/cactus era del generador
+// procedural viejo, no aplica acá). Si el tile tiene una cuerda colocada, eso
+// sí pisa la textura: se elige la variante según el LADO real por el que sale
+// la cuerda (hacia dónde queda el punto "suelo" respecto a esta montaña en
+// pantalla) — rope-1 sale por la izquierda, rope-2 por la derecha.
 function texturaMontana(tile: TileBioma, cuerda?: CuerdaConstruida): Textura {
   if (cuerda) {
     const haciaLaDerecha = cuerda.suelo.x - tile.x - (cuerda.suelo.y - tile.y) > 0;
     return haciaLaDerecha ? TEXTURA_MONTANA_CUERDA_2 : TEXTURA_MONTANA_CUERDA_1;
   }
-  const hash = Math.abs(tile.x * 928371 + tile.y * 543217) % 10;
-  if (hash < 6) return TEXTURA_MONTANA;
-  if (hash < 8) return TEXTURA_ARBOL_SECO;
-  return TEXTURA_CACTUS;
+  return TEXTURA_MONTANA;
 }
 
 // --- Río: autotiling con piezas direccionales ---
@@ -417,14 +413,14 @@ function texturaParaTile(
 ): Textura | null {
   switch (tile.tipo) {
     case 'arena':
-      // Cofre / piedra / lana ya tienen su propio bloque con arte real —
-      // reemplaza el rombo de arena entero, no es un ícono encima (igual
-      // que 'arbol'). Una vez recolectado/abierto vuelve a verse como
-      // arena plana. La madera "suelta" (tiles de prueba) no tiene bloque
-      // propio todavía, sigue usando el ícono (ver el filtro más abajo).
+      // Cofre / piedra / lana / madera ya tienen su propio bloque con arte
+      // real — reemplaza el rombo de arena entero, no es un ícono encima
+      // (igual que 'arbol'). Una vez recolectado/abierto vuelve a verse
+      // como arena plana.
       if (tile.cofre && !cofreAbierto) return TEXTURA_COFRE_CAJA;
       if (tile.recurso === 'piedra' && !recolectado) return TEXTURA_ROCA_MINERAL;
       if (tile.recurso === 'lana' && !recolectado) return TEXTURA_OVEJA;
+      if (tile.recurso === 'madera' && !recolectado) return TEXTURA_ARBOL_SECO;
       return TEXTURA_ARENA;
     case 'rio':
       return texturaRio(tile, tilesPorClave);
@@ -2047,13 +2043,15 @@ export default function PantallaJuego({ session }: { session: Session }) {
                   (DEBUG_SIN_FOG || descubiertas.has(claveCoord(tile))) &&
                   tile.recurso &&
                   !recursosRecolectados.has(claveCoord(tile)) &&
-                  // 'arbol', piedra y lana ya tienen su propia textura de
-                  // tile (dead-tree/mining-rock/sheep) — el ícono encima
-                  // sería redundante. Solo la madera "suelta" (tiles de
-                  // prueba, tipo 'arena' sin bloque propio) lo necesita.
+                  // 'arbol', piedra, lana y madera ya tienen su propia
+                  // textura de tile completo (dead-tree/mining-rock/sheep)
+                  // — el ícono encima sería redundante. Este bloque queda
+                  // como fallback genérico para el día que se agregue un
+                  // material nuevo sin arte propia todavía.
                   tile.tipo !== 'arbol' &&
                   tile.recurso !== 'piedra' &&
-                  tile.recurso !== 'lana'
+                  tile.recurso !== 'lana' &&
+                  tile.recurso !== 'madera'
               )
               .map(({ tile, pixel }) => {
                 const icono = ICONOS_RECURSO[tile.recurso!] ?? ICONOS_RECURSO.madera;

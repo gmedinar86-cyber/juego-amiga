@@ -37,6 +37,7 @@ const SIN_CAMINO_FLASH_MS = 350;
 const MENSAJE_ACCION_MS = 1800;
 const GOLPE_CACTUS_MS = 400;
 const DANO_CACTUS = 2;
+const MUERTE_MS = 3000;
 const COSTO_PUENTE_MADERA = 10;
 // Tope de vida del sistema nuevo de cactus/daño — independiente de
 // progreso.vida_maxima (columna preexistente, ya en uso con otro valor
@@ -718,6 +719,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const [ayudaVisible, setAyudaVisible] = useState(false);
   const [mensajeAccion, setMensajeAccion] = useState<string | null>(null);
   const [golpeCactus, setGolpeCactus] = useState(false);
+  const [muriendoVisible, setMuriendoVisible] = useState(false);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -756,6 +758,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const sinCaminoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mensajeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const golpeCactusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const muerteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     cameraOffsetRef.current = cameraOffset;
@@ -777,6 +780,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
       if (sinCaminoTimeoutRef.current) clearTimeout(sinCaminoTimeoutRef.current);
       if (mensajeTimeoutRef.current) clearTimeout(mensajeTimeoutRef.current);
       if (golpeCactusTimeoutRef.current) clearTimeout(golpeCactusTimeoutRef.current);
+      if (muerteTimeoutRef.current) clearTimeout(muerteTimeoutRef.current);
     };
   }, []);
 
@@ -1127,8 +1131,10 @@ export default function PantallaJuego({ session }: { session: Session }) {
     mostrarMensaje(`-${DANO_CACTUS} vida (cactus)`);
 
     const progresoActual = progresoRef.current;
+    let vidaLlegoACero = false;
     if (progresoActual) {
       const vidaNueva = Math.max(0, progresoActual.vida_actual - DANO_CACTUS);
+      vidaLlegoACero = vidaNueva === 0;
       const progresoActualizado = { ...progresoActual, vida_actual: vidaNueva };
       progresoRef.current = progresoActualizado;
       setProgreso(progresoActualizado);
@@ -1139,6 +1145,18 @@ export default function PantallaJuego({ session }: { session: Session }) {
         .then(({ error: errVida }) => {
           if (errVida) setError(errVida.message);
         });
+    }
+
+    // Vida a 0: mensaje de "HAS MUERTO..." en el centro de la pantalla
+    // durante MUERTE_MS, y después el mismo reset completo que el botón
+    // "Reiniciar nivel" (posición, inventario, descubrimiento, etc.).
+    if (vidaLlegoACero) {
+      setMuriendoVisible(true);
+      if (muerteTimeoutRef.current) clearTimeout(muerteTimeoutRef.current);
+      muerteTimeoutRef.current = setTimeout(() => {
+        setMuriendoVisible(false);
+        resetearNivel();
+      }, MUERTE_MS);
     }
 
     // La animación de ida ya había llegado al cactus (completarPaso corre
@@ -1184,6 +1202,14 @@ export default function PantallaJuego({ session }: { session: Session }) {
       mostrarSinCamino(destino);
       return;
     }
+
+    // Cualquier movimiento (nuevo o redirect) recentra la cámara en el
+    // personaje y la deja siguiéndolo — si el jugador había arrastrado el
+    // mapa para revisar otra zona, tocar una casilla para desplazarse
+    // cancela ese paneo manual en vez de dejar al personaje descentrado
+    // durante la animación.
+    cameraOffsetRef.current = { x: 0, y: 0 };
+    setCameraOffset({ x: 0, y: 0 });
 
     if (enCaminoActual) {
       colaRef.current = [colaRef.current[0], ...tramoNuevo];
@@ -1552,6 +1578,8 @@ export default function PantallaJuego({ session }: { session: Session }) {
     if (!tileActual || caminando) return;
     const cuerda = buscarCuerdaPorSuelo(cuerdasConstruidas, tileActual);
     if (!cuerda) return;
+    cameraOffsetRef.current = { x: 0, y: 0 };
+    setCameraOffset({ x: 0, y: 0 });
     colaRef.current = [cuerda.montana];
     setCaminando(true);
     ejecutarSiguientePaso();
@@ -1561,6 +1589,8 @@ export default function PantallaJuego({ session }: { session: Session }) {
     if (!tileActual || caminando) return;
     const cuerda = buscarCuerdaPorMontana(cuerdasConstruidas, tileActual);
     if (!cuerda) return;
+    cameraOffsetRef.current = { x: 0, y: 0 };
+    setCameraOffset({ x: 0, y: 0 });
     colaRef.current = [cuerda.suelo];
     setCaminando(true);
     ejecutarSiguientePaso();
@@ -2209,6 +2239,12 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
           {golpeCactus && <View pointerEvents="none" style={styles.flashDano} />}
 
+          {muriendoVisible && (
+            <View pointerEvents="none" style={styles.overlayMuerte}>
+              <Text style={styles.textoMuerte}>HAS MUERTO...</Text>
+            </View>
+          )}
+
           <TouchableOpacity style={styles.botonCentrar} onPress={() => setCameraOffset({ x: 0, y: 0 })}>
             <Text style={styles.botonCentrarTexto}>Centrar</Text>
           </TouchableOpacity>
@@ -2410,6 +2446,22 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     backgroundColor: 'rgba(220, 38, 38, 0.35)',
+  },
+  overlayMuerte: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(246, 239, 216, 0.92)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  textoMuerte: {
+    color: '#000000',
+    fontSize: 40,
+    fontWeight: '900',
+    textAlign: 'center',
   },
   accionesTile: {
     flexDirection: 'row',

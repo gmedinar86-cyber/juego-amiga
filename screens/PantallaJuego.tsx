@@ -38,6 +38,7 @@ const MENSAJE_ACCION_MS = 1800;
 const GOLPE_CACTUS_MS = 400;
 const DANO_CACTUS = 2;
 const MUERTE_MS = 3000;
+const GANASTE_MS = 3000;
 const COSTO_PUENTE_MADERA = 10;
 // Tope de vida del sistema nuevo de cactus/daño — independiente de
 // progreso.vida_maxima (columna preexistente, ya en uso con otro valor
@@ -720,6 +721,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const [mensajeAccion, setMensajeAccion] = useState<string | null>(null);
   const [golpeCactus, setGolpeCactus] = useState(false);
   const [muriendoVisible, setMuriendoVisible] = useState(false);
+  const [ganasteVisible, setGanasteVisible] = useState(false);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -759,6 +761,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const mensajeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const golpeCactusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const muerteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ganasteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     cameraOffsetRef.current = cameraOffset;
@@ -781,6 +784,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
       if (mensajeTimeoutRef.current) clearTimeout(mensajeTimeoutRef.current);
       if (golpeCactusTimeoutRef.current) clearTimeout(golpeCactusTimeoutRef.current);
       if (muerteTimeoutRef.current) clearTimeout(muerteTimeoutRef.current);
+      if (ganasteTimeoutRef.current) clearTimeout(ganasteTimeoutRef.current);
     };
   }, []);
 
@@ -1109,6 +1113,23 @@ export default function PantallaJuego({ session }: { session: Session }) {
         .then(({ error: errDesc }) => {
           if (errDesc) setError(errDesc.message);
         });
+    }
+
+    // Llegar al portal termina el nivel: la posición/niebla ya se
+    // persistieron arriba como cualquier paso normal, pero acá se corta la
+    // cola (no tiene sentido seguir caminando) y se muestra el festejo,
+    // seguido del mismo diálogo de "¿reiniciar el nivel?" que el botón
+    // manual — el jugador decide si empieza de nuevo.
+    if (tileDestino?.tipo === 'portal') {
+      colaRef.current = [];
+      setCaminando(false);
+      setGanasteVisible(true);
+      if (ganasteTimeoutRef.current) clearTimeout(ganasteTimeoutRef.current);
+      ganasteTimeoutRef.current = setTimeout(() => {
+        setGanasteVisible(false);
+        setResetVisible(true);
+      }, GANASTE_MS);
+      return;
     }
 
     colaRef.current.shift();
@@ -2245,6 +2266,12 @@ export default function PantallaJuego({ session }: { session: Session }) {
             </View>
           )}
 
+          {ganasteVisible && (
+            <View pointerEvents="none" style={styles.overlayGanaste}>
+              <Text style={styles.textoGanasteEmoji}>👍</Text>
+            </View>
+          )}
+
           <TouchableOpacity style={styles.botonCentrar} onPress={() => setCameraOffset({ x: 0, y: 0 })}>
             <Text style={styles.botonCentrarTexto}>Centrar</Text>
           </TouchableOpacity>
@@ -2461,6 +2488,20 @@ const styles = StyleSheet.create({
     color: '#000000',
     fontSize: 40,
     fontWeight: '900',
+    textAlign: 'center',
+  },
+  overlayGanaste: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(27, 37, 54, 0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  textoGanasteEmoji: {
+    fontSize: 120,
     textAlign: 'center',
   },
   accionesTile: {

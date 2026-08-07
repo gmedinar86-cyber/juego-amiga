@@ -1081,17 +1081,23 @@ function obtenerCasillasEnRadio(
   return resultado;
 }
 
-// Clasifica casillas por "peso" de renderizado
-function clasificarCasillas(
-  casillas: Coord[],
+// Revela casillas en lotes pequeños, SIN actualizar el estado de zoom
+function revelarProgresivamente(
+  nuevasCasillas: Coord[],
+  alTerminar: () => void,
   tilesPorClaveMap: Map<string, TileBioma>
-): { livianas: Coord[], pesadas: Coord[] } {
+) {
+  if (nuevasCasillas.length === 0) {
+    alTerminar();
+    return;
+  }
+
+  // Separar por tipo de renderizado
   const livianas: Coord[] = [];
   const pesadas: Coord[] = [];
-  
   const TIPOS_LIVIANOS = new Set(['arena', 'rio']);
   
-  for (const coord of casillas) {
+  for (const coord of nuevasCasillas) {
     const tile = tilesPorClaveMap.get(claveCoord(coord));
     if (tile && TIPOS_LIVIANOS.has(tile.tipo)) {
       livianas.push(coord);
@@ -1099,24 +1105,8 @@ function clasificarCasillas(
       pesadas.push(coord);
     }
   }
-  
-  return { livianas, pesadas };
-}
 
-// Revela casillas en fases: primero las livianas (arena/rio), luego las pesadas
-function revelarEnFases(
-  casillas: Coord[],
-  tilesPorClaveMap: Map<string, TileBioma>,
-  alTerminar: () => void
-) {
-  if (casillas.length === 0) {
-    alTerminar();
-    return;
-  }
-
-  const { livianas, pesadas } = clasificarCasillas(casillas, tilesPorClaveMap);
-  
-  // Primero: revelar TODAS las livianas de una vez (son rápidas)
+  // FASE 1: Revelar TODAS las livianas de una vez
   if (livianas.length > 0) {
     const nuevasDescubiertas = new Map(descubiertasRef.current);
     for (const coord of livianas) {
@@ -1125,19 +1115,21 @@ function revelarEnFases(
     descubiertasRef.current = nuevasDescubiertas;
     setDescubiertas(nuevasDescubiertas);
   }
-  
-  // Segundo: revelar las pesadas una por una con más delay
+
+  // FASE 2: Revelar pesadas una por una
   if (pesadas.length === 0) {
-    alTerminar();
+    // Esperar un frame para que se estabilice el renderizado
+    requestAnimationFrame(() => {
+      setTimeout(alTerminar, 50);
+    });
     return;
   }
 
   let index = 0;
-  const DELAY_MS = 100; // Más delay para las pesadas
-  const BATCH_SIZE = 1; // Una por una para no saturar
+  const DELAY_MS = 80; // Delay entre cada casilla pesada
 
-  function revelarSiguienteLote() {
-    const batch = pesadas.slice(index, index + BATCH_SIZE);
+  function revelarSiguientePesada() {
+    const batch = pesadas.slice(index, index + 1); // Una por una
     const nuevasDescubiertas = new Map(descubiertasRef.current);
     
     for (const coord of batch) {
@@ -1147,23 +1139,24 @@ function revelarEnFases(
     descubiertasRef.current = nuevasDescubiertas;
     setDescubiertas(nuevasDescubiertas);
     
-    index += BATCH_SIZE;
+    index += 1;
     
     if (index < pesadas.length) {
-      // Usar requestAnimationFrame para sincronizar con el refresco de pantalla
-      requestAnimationFrame(() => {
-        setTimeout(revelarSiguienteLote, DELAY_MS);
-      });
+      // Usar setTimeout para dar tiempo al renderizado
+      setTimeout(revelarSiguientePesada, DELAY_MS);
     } else {
-      alTerminar();
+      // Esperar un frame extra para que se estabilice todo
+      requestAnimationFrame(() => {
+        setTimeout(alTerminar, 50);
+      });
     }
   }
   
-  // Pequeño delay antes de empezar con las pesadas
-  setTimeout(revelarSiguienteLote, 50);
+  // Empezar con las pesadas después de un pequeño delay
+  setTimeout(revelarSiguientePesada, 80);
 }
 
-// Continúa después de revelar la niebla
+// Continúa después de revelar la niebla (sin afectar el zoom)
 function continuarDespuesDeRevelar(destinoPaso: Coord, tileDestino: TileBioma | undefined) {
   // Persistir en Supabase
   const progresoAnterior = progresoRef.current;
@@ -1213,7 +1206,7 @@ function continuarDespuesDeRevelar(destinoPaso: Coord, tileDestino: TileBioma | 
   }
 }
 
-// NUEVA VERSIÓN DE completarPaso CON REVELADO EN FASES
+// NUEVA VERSIÓN DE completarPaso CON REVELADO PROGRESIVO Y ZOOM FIJADO
 function completarPaso(destinoPaso: Coord) {
   if (!bioma) return;
   const tileDestino = tilesPorClave.get(claveCoord(destinoPaso));
@@ -1245,13 +1238,13 @@ function completarPaso(destinoPaso: Coord) {
     return;
   }
 
-  // Revelar en fases (livianas primero, pesadas después)
-  revelarEnFases(
+  // Revelar progresivamente
+  revelarProgresivamente(
     nuevasCasillas,
-    tilesPorClave,
     () => {
       continuarDespuesDeRevelar(destinoPaso, tileDestino);
-    }
+    },
+    tilesPorClave
   );
 }
 // ============================================================
@@ -1848,7 +1841,20 @@ function completarPaso(destinoPaso: Coord) {
     limitesRef.current = limitesBioma;
   }, [limitesBioma]);
 
-  const zoomMinimo = useMemo(() => calcularZoomMinimo(limitesBioma), [limitesBioma]);
+  // Guardamos el zoom mínimo para que no se re-calcule constantemente
+const [zoomMinimoFijo, setZoomMinimoFijo] = useState(ZOOM_MIN_ABSOLUTO);
+
+// Solo calculamos el zoom mínimo UNA VEZ al cargar el bioma
+useEffect(() => {
+  if (limitesBioma) {
+    const nuevoMinimo = calcularZoomMinimo(limitesBioma);
+    setZoomMinimoFijo(nuevoMinimo);
+    setZoom((z) => Math.max(z, nuevoMinimo));
+  }
+}, [limitesBioma]); // <-- Esto solo se ejecuta cuando cambia el bioma, NO cuando se revela niebla
+
+// Usa zoomMinimoFijo en lugar de zoomMinimo
+const zoomMinimo = zoomMinimoFijo;
 
   useEffect(() => {
     zoomMinRef.current = zoomMinimo;

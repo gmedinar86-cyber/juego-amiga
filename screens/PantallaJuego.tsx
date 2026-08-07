@@ -39,7 +39,7 @@ const GOLPE_CACTUS_MS = 400;
 const DANO_CACTUS = 2;
 const MUERTE_MS = 3000;
 const GANASTE_MS = 3000;
-const COSTO_PUENTE_MADERA = 10;
+const COSTO_PUENTE_MADERA = 5;
 // Tope de vida del sistema nuevo de cactus/daño — independiente de
 // progreso.vida_maxima (columna preexistente, ya en uso con otro valor
 // por defecto para otros fines, no la pisamos).
@@ -1483,14 +1483,14 @@ export default function PantallaJuego({ session }: { session: Session }) {
     if (!objetivo) {
       const vecinoCualquiera = buscarVecinoRioSinPuente(origen, tilesPorClave, puentesConstruidos);
       if (!vecinoCualquiera) {
-        mostrarMensaje('Necesitás estar junto a un río para construir un puente');
+        mostrarMensaje('Necesitas estar junto a un río para construir un puente');
       } else {
         mostrarMensaje('Ese tramo de río es muy ancho — buscá un tramo de 1 sola casilla');
       }
       return;
     }
     if (!tieneBancoDeTrabajo) {
-      mostrarMensaje('Necesitás un banco de trabajo para construir un puente');
+      mostrarMensaje('Necesitas un banco de trabajo para construir un puente');
       return;
     }
     const cantidadMadera = cantidadDeObjeto(inventario, catalogoObjetos, 'Madera');
@@ -2090,7 +2090,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
             <Text style={styles.modalSubtitulo}>Puente</Text>
             <Text style={styles.modalVacio}>
               Parate justo al lado de un tramo de río de 1 sola casilla de ancho (no sirve en tramos anchos o
-              confluencias). Necesitás un banco de trabajo y 10 de madera. Si intentás construirlo sin cumplir algo,
+              confluencias). Necesitas un banco de trabajo y 5 de madera. Si intentas construirlo sin cumplir algo,
               el juego te dice exactamente qué te falta.
             </Text>
 

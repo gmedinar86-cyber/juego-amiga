@@ -2134,21 +2134,22 @@ export default function PantallaJuego({ session }: { session: Session }) {
               const esPuenteTile = tile.tipo === 'rio' && puentesConstruidos.has(clave);
               const cuerdaEnEsteMontana =
                 tile.tipo === 'montana' ? cuerdasConstruidas.find((c) => coordsIguales(c.montana, tile)) : undefined;
-              const relleno = revelada ? (esPuenteTile ? COLOR_PUENTE : colorTile(tile.tipo)) : '#1B2536';
-              // Textura solo en tiles revelados — si se dibujara también en
-              // niebla, la silueta (montaña, río) se filtraría a través del
-              // fill oscuro de fog, que es una capa aparte con su propio alfa.
-              const textura = revelada
-                ? esPuenteTile
-                  ? TEXTURA_PUENTE
-                  : texturaParaTile(
-                      tile,
-                      tilesPorClave,
-                      recursosRecolectados.has(clave),
-                      cofresAbiertos.has(clave),
-                      cuerdaEnEsteMontana
-                    )
-                : null;
+              const relleno = esPuenteTile ? COLOR_PUENTE : colorTile(tile.tipo);
+              // La textura se calcula SIEMPRE para cualquier tile dentro de la
+              // ventana de cámara (culling), esté o no revelado por la niebla —
+              // así la <Image> ya está montada y decodificada de antemano
+              // cuando la niebla se abre ahí, en vez de tener que montarse
+              // justo en ese instante (eso causaba el salto). Lo que depende
+              // de `revelada` ahora es solo la niebla en sí, como capa aparte.
+              const textura = esPuenteTile
+                ? TEXTURA_PUENTE
+                : texturaParaTile(
+                    tile,
+                    tilesPorClave,
+                    recursosRecolectados.has(clave),
+                    cofresAbiertos.has(clave),
+                    cuerdaEnEsteMontana
+                  );
 
               return (
                 <Fragment key={clave}>
@@ -2170,6 +2171,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
                       />
                     </G>
                   )}
+                  {!revelada && <Polygon points={puntosPoligono} fill="#1B2536" />}
                 </Fragment>
               );
             })}

@@ -1057,88 +1057,165 @@ export default function PantallaJuego({ session }: { session: Session }) {
   // niebla (radio 3 si el tile de llegada es montaña, si no 1), persiste en
   // Supabase (fire-and-forget) y sigue con el próximo paso de la cola, si
   // quedó alguno tras un posible redirect.
-  function completarPaso(destinoPaso: Coord) {
-    if (!bioma) return;
-    const tileDestino = tilesPorClave.get(claveCoord(destinoPaso));
+  // ============================================================
+// NUEVAS FUNCIONES PARA REVELADO PROGRESIVO DE NIEBLA
+// ============================================================
 
-    if (tileDestino?.tipo === 'cactus') {
-      const casillaAnterior = progresoRef.current
-        ? { x: progresoRef.current.posicion_q, y: progresoRef.current.posicion_r }
-        : destinoPaso;
-      golpearCactus(casillaAnterior);
-      return;
-    }
-
-    const enMontana = tileDestino?.tipo === 'montana';
-    const radio = enMontana ? RADIO_VISION_MONTANA : RADIO_VISION_DEFAULT;
-    // El predicado por defecto de fusionarDescubiertas (transitabilidad de
-    // suelo) excluye 'montana' — si se usara acá, el BFS de revelado ni
-    // siquiera podría expandirse desde el propio tile donde está parado el
-    // jugador (radio 3 quedaría en los hechos como radio 0). Parado en una
-    // montaña, el radio se expande a través del cúmulo de montaña conectado,
-    // igual que ya restringe el movimiento por tap (ver iniciarCaminoHacia).
-    const predicadoVision = enMontana ? (t: TileBioma) => t.tipo === 'montana' : undefined;
-
-    const actualizadas = fusionarDescubiertas(
-      descubiertasRef.current,
-      destinoPaso,
-      tilesPorClave,
-      radio,
-      predicadoVision
-    );
-    const huboNuevoDescubrimiento = actualizadas.size !== descubiertasRef.current.size;
-    descubiertasRef.current = actualizadas;
-    setDescubiertas(actualizadas);
-
-    const progresoAnterior = progresoRef.current;
-    if (progresoAnterior) {
-      const progresoActualizado = { ...progresoAnterior, posicion_q: destinoPaso.x, posicion_r: destinoPaso.y };
-      progresoRef.current = progresoActualizado;
-      setProgreso(progresoActualizado);
-
-      supabase
-        .from('progreso_jugador')
-        .update({ posicion_q: destinoPaso.x, posicion_r: destinoPaso.y })
-        .eq('id', progresoActualizado.id)
-        .then(({ error: errMover }) => {
-          if (errMover) setError(errMover.message);
-        });
-    }
-
-    if (huboNuevoDescubrimiento && descubrimientoId) {
-      supabase
-        .from('descubrimiento_jugador')
-        .update({ casillas_descubiertas: Array.from(actualizadas.values()) })
-        .eq('id', descubrimientoId)
-        .then(({ error: errDesc }) => {
-          if (errDesc) setError(errDesc.message);
-        });
-    }
-
-    // Llegar al portal termina el nivel: la posición/niebla ya se
-    // persistieron arriba como cualquier paso normal, pero acá se corta la
-    // cola (no tiene sentido seguir caminando) y se muestra el festejo,
-    // seguido del mismo diálogo de "¿reiniciar el nivel?" que el botón
-    // manual — el jugador decide si empieza de nuevo.
-    if (tileDestino?.tipo === 'portal') {
-      colaRef.current = [];
-      setCaminando(false);
-      setGanasteVisible(true);
-      if (ganasteTimeoutRef.current) clearTimeout(ganasteTimeoutRef.current);
-      ganasteTimeoutRef.current = setTimeout(() => {
-        setGanasteVisible(false);
-        setResetVisible(true);
-      }, GANASTE_MS);
-      return;
-    }
-
-    colaRef.current.shift();
-    if (colaRef.current.length > 0) {
-      ejecutarSiguientePaso();
-    } else {
-      setCaminando(false);
+// Obtiene las casillas que se van a revelar (sin modificar el estado)
+function obtenerCasillasEnRadio(
+  centro: Coord,
+  radio: number,
+  tilesPorClaveMap: Map<string, TileBioma>,
+  predicado?: (t: TileBioma) => boolean
+): Coord[] {
+  const resultado: Coord[] = [];
+  const actuales = descubiertasRef.current;
+  
+  const alcanzables = tilesAlcanzables(centro, radio, tilesPorClaveMap, predicado || (() => true));
+  for (const c of alcanzables) {
+    const clave = claveCoord(c);
+    if (!actuales.has(clave)) {
+      resultado.push(c);
     }
   }
+  return resultado;
+}
+
+// Revela casillas en lotes pequeños con un pequeño retraso
+function revelarProgresivamente(
+  nuevasCasillas: Coord[],
+  alTerminar: () => void,
+  onProgress?: (progreso: number) => void
+) {
+  if (nuevasCasillas.length === 0) {
+    alTerminar();
+    return;
+  }
+
+  let index = 0;
+  const BATCH_SIZE = 3; // Revela de 3 en 3 para no ser demasiado lento
+  const DELAY_MS = 60; // 60ms entre cada lote
+
+  function revelarSiguienteLote() {
+    const batch = nuevasCasillas.slice(index, index + BATCH_SIZE);
+    const nuevasDescubiertas = new Map(descubiertasRef.current);
+    
+    for (const coord of batch) {
+      nuevasDescubiertas.set(claveCoord(coord), coord);
+    }
+    
+    descubiertasRef.current = nuevasDescubiertas;
+    setDescubiertas(nuevasDescubiertas);
+    
+    if (onProgress) {
+      onProgress(Math.min(1, (index + batch.length) / nuevasCasillas.length));
+    }
+    
+    index += BATCH_SIZE;
+    
+    if (index < nuevasCasillas.length) {
+      setTimeout(revelarSiguienteLote, DELAY_MS);
+    } else {
+      alTerminar();
+    }
+  }
+  
+  revelarSiguienteLote();
+}
+
+// Continúa después de revelar la niebla
+function continuarDespuesDeRevelar(destinoPaso: Coord, tileDestino: TileBioma | undefined) {
+  // Persistir en Supabase
+  const progresoAnterior = progresoRef.current;
+  if (progresoAnterior) {
+    const progresoActualizado = { ...progresoAnterior, posicion_q: destinoPaso.x, posicion_r: destinoPaso.y };
+    progresoRef.current = progresoActualizado;
+    setProgreso(progresoActualizado);
+
+    supabase
+      .from('progreso_jugador')
+      .update({ posicion_q: destinoPaso.x, posicion_r: destinoPaso.y })
+      .eq('id', progresoActualizado.id)
+      .then(({ error: errMover }) => {
+        if (errMover) setError(errMover.message);
+      });
+  }
+
+  if (descubrimientoId) {
+    supabase
+      .from('descubrimiento_jugador')
+      .update({ casillas_descubiertas: Array.from(descubiertasRef.current.values()) })
+      .eq('id', descubrimientoId)
+      .then(({ error: errDesc }) => {
+        if (errDesc) setError(errDesc.message);
+      });
+  }
+
+  // Verificar si llegó al portal
+  if (tileDestino?.tipo === 'portal') {
+    colaRef.current = [];
+    setCaminando(false);
+    setGanasteVisible(true);
+    if (ganasteTimeoutRef.current) clearTimeout(ganasteTimeoutRef.current);
+    ganasteTimeoutRef.current = setTimeout(() => {
+      setGanasteVisible(false);
+      setResetVisible(true);
+    }, GANASTE_MS);
+    return;
+  }
+
+  // Continuar con el siguiente paso
+  colaRef.current.shift();
+  if (colaRef.current.length > 0) {
+    ejecutarSiguientePaso();
+  } else {
+    setCaminando(false);
+  }
+}
+
+// NUEVA VERSIÓN DE completarPaso CON REVELADO PROGRESIVO
+function completarPaso(destinoPaso: Coord) {
+  if (!bioma) return;
+  const tileDestino = tilesPorClave.get(claveCoord(destinoPaso));
+
+  // Si es cactus, no revelamos niebla, solo aplicamos el daño
+  if (tileDestino?.tipo === 'cactus') {
+    const casillaAnterior = progresoRef.current
+      ? { x: progresoRef.current.posicion_q, y: progresoRef.current.posicion_r }
+      : destinoPaso;
+    golpearCactus(casillaAnterior);
+    return;
+  }
+
+  const enMontana = tileDestino?.tipo === 'montana';
+  const radio = enMontana ? RADIO_VISION_MONTANA : RADIO_VISION_DEFAULT;
+  const predicadoVision = enMontana ? (t: TileBioma) => t.tipo === 'montana' : undefined;
+
+  // Obtener SOLO las casillas nuevas que se van a revelar
+  const nuevasCasillas = obtenerCasillasEnRadio(
+    destinoPaso,
+    radio,
+    tilesPorClave,
+    predicadoVision
+  );
+
+  // Si no hay casillas nuevas, continuar directamente
+  if (nuevasCasillas.length === 0) {
+    continuarDespuesDeRevelar(destinoPaso, tileDestino);
+    return;
+  }
+
+  // Revelar progresivamente y luego continuar
+  revelarProgresivamente(
+    nuevasCasillas,
+    () => {
+      continuarDespuesDeRevelar(destinoPaso, tileDestino);
+    }
+  );
+}
+// ============================================================
+// FIN DE LAS NUEVAS FUNCIONES
+// ============================================================
 
   // Tocar un cactus resta vida y hace retroceder al jugador a la casilla
   // anterior en vez de asentarlo ahí — corta cualquier paso encolado (no

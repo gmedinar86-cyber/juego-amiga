@@ -1057,7 +1057,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
   // niebla (radio 3 si el tile de llegada es montaña, si no 1), persiste en
   // Supabase (fire-and-forget) y sigue con el próximo paso de la cola, si
   // quedó alguno tras un posible redirect.
-  // ============================================================
+// ============================================================
 // NUEVAS FUNCIONES PARA REVELADO PROGRESIVO DE NIEBLA
 // ============================================================
 
@@ -1081,23 +1081,63 @@ function obtenerCasillasEnRadio(
   return resultado;
 }
 
-// Revela casillas en lotes pequeños con un pequeño retraso
-function revelarProgresivamente(
-  nuevasCasillas: Coord[],
-  alTerminar: () => void,
-  onProgress?: (progreso: number) => void
+// Clasifica casillas por "peso" de renderizado
+function clasificarCasillas(
+  casillas: Coord[],
+  tilesPorClaveMap: Map<string, TileBioma>
+): { livianas: Coord[], pesadas: Coord[] } {
+  const livianas: Coord[] = [];
+  const pesadas: Coord[] = [];
+  
+  const TIPOS_LIVIANOS = new Set(['arena', 'rio']);
+  
+  for (const coord of casillas) {
+    const tile = tilesPorClaveMap.get(claveCoord(coord));
+    if (tile && TIPOS_LIVIANOS.has(tile.tipo)) {
+      livianas.push(coord);
+    } else {
+      pesadas.push(coord);
+    }
+  }
+  
+  return { livianas, pesadas };
+}
+
+// Revela casillas en fases: primero las livianas (arena/rio), luego las pesadas
+function revelarEnFases(
+  casillas: Coord[],
+  tilesPorClaveMap: Map<string, TileBioma>,
+  alTerminar: () => void
 ) {
-  if (nuevasCasillas.length === 0) {
+  if (casillas.length === 0) {
+    alTerminar();
+    return;
+  }
+
+  const { livianas, pesadas } = clasificarCasillas(casillas, tilesPorClaveMap);
+  
+  // Primero: revelar TODAS las livianas de una vez (son rápidas)
+  if (livianas.length > 0) {
+    const nuevasDescubiertas = new Map(descubiertasRef.current);
+    for (const coord of livianas) {
+      nuevasDescubiertas.set(claveCoord(coord), coord);
+    }
+    descubiertasRef.current = nuevasDescubiertas;
+    setDescubiertas(nuevasDescubiertas);
+  }
+  
+  // Segundo: revelar las pesadas una por una con más delay
+  if (pesadas.length === 0) {
     alTerminar();
     return;
   }
 
   let index = 0;
-  const BATCH_SIZE = 3; // Revela de 3 en 3 para no ser demasiado lento
-  const DELAY_MS = 60; // 60ms entre cada lote
+  const DELAY_MS = 100; // Más delay para las pesadas
+  const BATCH_SIZE = 1; // Una por una para no saturar
 
   function revelarSiguienteLote() {
-    const batch = nuevasCasillas.slice(index, index + BATCH_SIZE);
+    const batch = pesadas.slice(index, index + BATCH_SIZE);
     const nuevasDescubiertas = new Map(descubiertasRef.current);
     
     for (const coord of batch) {
@@ -1107,20 +1147,20 @@ function revelarProgresivamente(
     descubiertasRef.current = nuevasDescubiertas;
     setDescubiertas(nuevasDescubiertas);
     
-    if (onProgress) {
-      onProgress(Math.min(1, (index + batch.length) / nuevasCasillas.length));
-    }
-    
     index += BATCH_SIZE;
     
-    if (index < nuevasCasillas.length) {
-      setTimeout(revelarSiguienteLote, DELAY_MS);
+    if (index < pesadas.length) {
+      // Usar requestAnimationFrame para sincronizar con el refresco de pantalla
+      requestAnimationFrame(() => {
+        setTimeout(revelarSiguienteLote, DELAY_MS);
+      });
     } else {
       alTerminar();
     }
   }
   
-  revelarSiguienteLote();
+  // Pequeño delay antes de empezar con las pesadas
+  setTimeout(revelarSiguienteLote, 50);
 }
 
 // Continúa después de revelar la niebla
@@ -1173,7 +1213,7 @@ function continuarDespuesDeRevelar(destinoPaso: Coord, tileDestino: TileBioma | 
   }
 }
 
-// NUEVA VERSIÓN DE completarPaso CON REVELADO PROGRESIVO
+// NUEVA VERSIÓN DE completarPaso CON REVELADO EN FASES
 function completarPaso(destinoPaso: Coord) {
   if (!bioma) return;
   const tileDestino = tilesPorClave.get(claveCoord(destinoPaso));
@@ -1205,9 +1245,10 @@ function completarPaso(destinoPaso: Coord) {
     return;
   }
 
-  // Revelar progresivamente y luego continuar
-  revelarProgresivamente(
+  // Revelar en fases (livianas primero, pesadas después)
+  revelarEnFases(
     nuevasCasillas,
+    tilesPorClave,
     () => {
       continuarDespuesDeRevelar(destinoPaso, tileDestino);
     }

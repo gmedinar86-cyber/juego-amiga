@@ -225,30 +225,16 @@ const TEXTURA_PUENTE_VOLTEADO = {
 // sí pisa la textura: se elige la variante según el LADO real por el que sale
 // la cuerda (hacia dónde queda el punto "suelo" respecto a esta montaña en
 // pantalla) — rope-1 sale por la izquierda, rope-2 por la derecha.
-function esCuerdaTrasera(cuerda: CuerdaConstruida): boolean {
-  const dx = cuerda.suelo.x - cuerda.montana.x;
-  const dy = cuerda.suelo.y - cuerda.montana.y;
-  return dx + dy < 0;
-}
-
 function texturaMontana(tile: TileBioma, cuerda?: CuerdaConstruida): Textura {
   if (cuerda) {
-    if (esCuerdaTrasera(cuerda)) {
-      return TEXTURA_MONTANA;
-    }
     const dx = cuerda.suelo.x - tile.x;
     const dy = cuerda.suelo.y - tile.y;
     const screenXDiff = dx - dy;
-    if (screenXDiff > 0) {
-      return TEXTURA_MONTANA_CUERDA_2;
-    } else if (screenXDiff < 0) {
-      return TEXTURA_MONTANA_CUERDA_1;
-    } else {
-      return dy > 0 ? TEXTURA_MONTANA_CUERDA_1 : TEXTURA_MONTANA_CUERDA_2;
-    }
+    return screenXDiff > 0 ? TEXTURA_MONTANA_CUERDA_2 : TEXTURA_MONTANA_CUERDA_1;
   }
   return TEXTURA_MONTANA;
 }
+
 
 
 
@@ -2374,18 +2360,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
                       />
                     </G>
                   )}
-                  {(() => {
-                    const cMontana = tile.tipo === 'montana' ? cuerdasConstruidas.find((c) => coordsIguales(c.montana, tile)) : undefined;
-                    const esAtras = cMontana ? esCuerdaTrasera(cMontana) : false;
-                    if (!revelada || !esAtras) return null;
-                    return (
-                      <G transform={`translate(${pixel.x},${pixel.y - 28})`}>
-                        <Ellipse cx={0} cy={1} rx={8} ry={4.5} fill="rgba(0, 0, 0, 0.35)" />
-                        <Ellipse cx={0} cy={0} rx={8} ry={4} stroke="#F4B93F" strokeWidth={2.5} fill="none" strokeDasharray="5 2" />
-                        <Circle cx={0} cy={-2} r={2.5} fill="#F4B93F" stroke="#5C4018" strokeWidth={1} />
-                      </G>
-                    );
-                  })()}
+
 
                   {esSueloCuerda && (
                     <G transform={`translate(${pixel.x},${pixel.y})`}>

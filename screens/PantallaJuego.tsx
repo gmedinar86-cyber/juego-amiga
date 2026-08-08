@@ -286,6 +286,26 @@ function texturaMontana(tile: TileBioma, cuerda?: CuerdaConstruida): Textura {
 // generados quedan conectados por bordes cardinales de todas formas.
 type Borde = 'NE' | 'SE' | 'SW' | 'NW';
 
+interface ConfigRioPrueba {
+  bordes: Borde[];
+}
+
+const CONFIG_RIO_PRUEBA: Record<string, ConfigRioPrueba> = {
+  '23,20': { bordes: ['NW', 'NE'] },
+  '23,21': { bordes: ['NW', 'SE'] },
+  '23,22': { bordes: ['NW', 'SE'] },
+  '23,23': { bordes: ['NW', 'SE'] },
+  '23,24': { bordes: ['NW', 'SE'] },
+  '24,20': { bordes: ['SW', 'SE'] },
+  '24,19': { bordes: ['NW', 'NE'] },
+  '25,19': { bordes: ['NE', 'SW'] },
+  '26,19': { bordes: ['SW', 'SE'] },
+  '26,18': { bordes: ['NW'] },
+  '27,18': { bordes: ['NE', 'SW'] },
+  '28,18': { bordes: ['NE', 'SW'] },
+  '29,18': { bordes: ['NE', 'SW'] },
+};
+
 const BORDE_DELTA: Record<Borde, Coord> = {
   NE: { x: 0, y: -1 },
   SE: { x: 1, y: 0 },
@@ -2618,18 +2638,39 @@ export default function PantallaJuego({ session }: { session: Session }) {
                     )
                   : undefined;
 
+              const configRioPrueba = CONFIG_RIO_PRUEBA[clave];
+              const esRioPrueba = Boolean(configRioPrueba);
+              const rellenoFinal = esRioPrueba ? '#3B8EC2' : relleno;
+
               return (
                 <Fragment key={clave}>
                   <Polygon
                     points={ROMBO_BASE_POINTS}
                     transform={`translate(${pixel.x},${pixel.y})`}
-                    fill={relleno}
+                    fill={rellenoFinal}
                     stroke={sinCamino ? '#E8746A' : 'none'}
                     strokeWidth={sinCamino ? 2.5 : 0}
                   />
 
+                  {configRioPrueba && (
+                    <G transform={`translate(${pixel.x},${pixel.y})`}>
+                      {configRioPrueba.bordes.includes('NW') && (
+                        <Path d="M -36,0 L 0,-18" stroke="#946E2E" strokeWidth={3.5} strokeLinecap="round" />
+                      )}
+                      {configRioPrueba.bordes.includes('NE') && (
+                        <Path d="M 0,-18 L 36,0" stroke="#946E2E" strokeWidth={3.5} strokeLinecap="round" />
+                      )}
+                      {configRioPrueba.bordes.includes('SE') && (
+                        <Path d="M 36,0 L 0,18" stroke="#946E2E" strokeWidth={3.5} strokeLinecap="round" />
+                      )}
+                      {configRioPrueba.bordes.includes('SW') && (
+                        <Path d="M 0,18 L -36,0" stroke="#946E2E" strokeWidth={3.5} strokeLinecap="round" />
+                      )}
+                    </G>
+                  )}
 
-                  {textura && textura !== TEXTURA_ARENA && (() => {
+
+                  {textura && textura !== TEXTURA_ARENA && !esRioPrueba && (() => {
                     const animActiva = animacionesAccion.find(
                       (a) => a.tileX === tile.x && a.tileY === tile.y && Date.now() - a.inicioMs < a.duracionMs
                     );

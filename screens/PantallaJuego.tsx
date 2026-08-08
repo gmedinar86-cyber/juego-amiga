@@ -104,7 +104,7 @@ interface Textura {
 }
 
 function crearTextura(fuente: any, anchoOriginal: number, altoOriginal: number): Textura {
-  return { fuente: resolverFuenteImagen(fuente), alto: ANCHO_TILE / (anchoOriginal / altoOriginal) };
+  return { fuente, alto: ANCHO_TILE / (anchoOriginal / altoOriginal) };
 }
 
 const TEXTURA_ARENA = crearTextura(require('../assets/tiles/sand.png'), 263, 199);
@@ -2625,7 +2625,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
                         opacity={opacidadExtra}
                       >
                         <ImagenSvg
-                          href={textura.fuente}
+                          href={resolverFuenteImagen(textura.fuente)}
                           x={-(textura.ancho ?? ANCHO_TILE) / 2}
                           y={textura.centrado ? -textura.alto / 2 : -ALTO_TILE / 2}
                           width={textura.ancho ?? ANCHO_TILE}

@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Svg, { Circle, G, Image as ImagenSvg, Path, Polygon, Polyline } from 'react-native-svg';
+import Svg, { Circle, G, Image as ImagenSvg, Path, Polygon, Polyline, Text as TextoSvg } from 'react-native-svg';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import {
@@ -671,6 +671,66 @@ function esArenaVaciaParaCuerda(tile: TileBioma): boolean {
   return tile.tipo === 'arena' && !tile.recurso && !tile.cofre;
 }
 
+function inicialesDireccion(origen: Coord, destino: Coord): string {
+  const dx = destino.x - origen.x;
+  const dy = destino.y - origen.y;
+  if (dx === 0 && dy === -1) return 'NE';
+  if (dx === 1 && dy === 0) return 'SE';
+  if (dx === 0 && dy === 1) return 'SW';
+  if (dx === -1 && dy === 0) return 'NW';
+  if (dx === 1 && dy === -1) return 'E';
+  if (dx === 1 && dy === 1) return 'S';
+  if (dx === -1 && dy === 1) return 'O';
+  if (dx === -1 && dy === -1) return 'N';
+  return '?';
+}
+
+function nombreDireccion(origen: Coord, destino: Coord): string {
+  const inc = inicialesDireccion(origen, destino);
+  if (inc === 'NE') return 'Noreste (NE)';
+  if (inc === 'SE') return 'Sudeste (SE)';
+  if (inc === 'SW') return 'Sudoeste (SW)';
+  if (inc === 'NW') return 'Noroeste (NW)';
+  if (inc === 'E') return 'Este (E)';
+  if (inc === 'S') return 'Sur (S)';
+  if (inc === 'O') return 'Oeste (O)';
+  if (inc === 'N') return 'Norte (N)';
+  return 'Lado adyacente';
+}
+
+
+function buscarTodasLasOpcionesCuerda(
+  origen: TileBioma,
+  tilesPorClave: Map<string, TileBioma>,
+  cuerdasExistentes: CuerdaConstruida[]
+): CuerdaConstruida[] {
+  const opciones: CuerdaConstruida[] = [];
+  if (origen.tipo === 'montana') {
+    for (const v of vecinos(origen)) {
+      const vecino = tilesPorClave.get(claveCoord(v));
+      if (vecino && esArenaVaciaParaCuerda(vecino)) {
+        const par: CuerdaConstruida = { suelo: vecino, montana: origen };
+        const yaExiste = cuerdasExistentes.some(
+          (c) => coordsIguales(c.suelo, par.suelo) && coordsIguales(c.montana, par.montana)
+        );
+        if (!yaExiste) opciones.push(par);
+      }
+    }
+  } else {
+    for (const v of vecinos(origen)) {
+      const vecino = tilesPorClave.get(claveCoord(v));
+      if (vecino?.tipo === 'montana') {
+        const par: CuerdaConstruida = { suelo: origen, montana: vecino };
+        const yaExiste = cuerdasExistentes.some(
+          (c) => coordsIguales(c.suelo, par.suelo) && coordsIguales(c.montana, par.montana)
+        );
+        if (!yaExiste) opciones.push(par);
+      }
+    }
+  }
+  return opciones;
+}
+
 // Para "Colocar cuerda": si el jugador está sobre una montaña, busca un
 // vecino de arena vacía (el lado "suelo" al que se baja); si está en
 // tierra, busca un vecino que SÍ sea montaña (el lado "montaña" al que se
@@ -720,6 +780,9 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const [crafteoVisible, setCrafteoVisible] = useState(false);
   const [resetVisible, setResetVisible] = useState(false);
   const [ayudaVisible, setAyudaVisible] = useState(false);
+  const [modalCuerdaVisible, setModalCuerdaVisible] = useState(false);
+  const [opcionesCuerda, setOpcionesCuerda] = useState<CuerdaConstruida[]>([]);
+
   const [mensajeAccion, setMensajeAccion] = useState<string | null>(null);
   const [golpeCactus, setGolpeCactus] = useState(false);
   const [muriendoVisible, setMuriendoVisible] = useState(false);
@@ -1572,9 +1635,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
     }
   }
 
-  // Igual que construirPuente: valida cada condición por separado y explica
-  // con un mensaje cuál falta, en vez de fallar en silencio.
-  async function colocarCuerda() {
+  function solicitarColocarCuerda() {
     if (!progreso || !descubrimientoId || !tileActual) return;
 
     const cercaDeMontana =
@@ -1585,17 +1646,33 @@ export default function PantallaJuego({ session }: { session: Session }) {
       return;
     }
 
-    const par = buscarParParaCuerda(tileActual, tilesPorClave);
-    if (!par) {
-      // Solo puede fallar acá parado EN la montaña: no hay ninguna casilla
-      // de arena vacía (sin recurso ni cofre) al lado para bajar.
-      mostrarMensaje('No hay una casilla de arena vacía al lado para bajar la cuerda');
+    const cuerdaObjeto = Array.from(catalogoObjetos.values()).find((o) => o.nombre === 'Cuerda');
+    const instancia = cuerdaObjeto ? inventario.find((item) => item.objeto_id === cuerdaObjeto.id) : undefined;
+    if (!instancia) {
+      mostrarMensaje('Necesitás una Cuerda en el inventario');
       return;
     }
-    if (cuerdasConstruidas.some((c) => coordsIguales(c.suelo, par.suelo) && coordsIguales(c.montana, par.montana))) {
-      mostrarMensaje('Ya hay una cuerda colocada ahí');
+
+    const opciones = buscarTodasLasOpcionesCuerda(tileActual, tilesPorClave, cuerdasConstruidas);
+    if (opciones.length === 0) {
+      if (tileActual.tipo === 'montana') {
+        mostrarMensaje('No hay ninguna casilla de arena vacía libre al lado para bajar la cuerda');
+      } else {
+        mostrarMensaje('No hay ninguna montaña libre al lado para colocar la cuerda');
+      }
       return;
     }
+
+    if (opciones.length === 1) {
+      confirmarColocarCuerda(opciones[0]);
+    } else {
+      setOpcionesCuerda(opciones);
+      setModalCuerdaVisible(true);
+    }
+  }
+
+  async function confirmarColocarCuerda(par: CuerdaConstruida) {
+    if (!progreso || !descubrimientoId) return;
 
     const cuerdaObjeto = Array.from(catalogoObjetos.values()).find((o) => o.nombre === 'Cuerda');
     const instancia = cuerdaObjeto ? inventario.find((item) => item.objeto_id === cuerdaObjeto.id) : undefined;
@@ -1603,6 +1680,8 @@ export default function PantallaJuego({ session }: { session: Session }) {
       mostrarMensaje('Necesitás una Cuerda en el inventario');
       return;
     }
+
+    setModalCuerdaVisible(false);
 
     const { error: errBorrar } = await supabase.from('inventario_jugador').delete().eq('id', instancia.id);
     if (errBorrar) {
@@ -1621,6 +1700,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
       .eq('id', descubrimientoId);
     if (errCuerdas) setError(errCuerdas.message);
   }
+
 
   // Subir/bajar son un solo paso: reusan la misma cola/animación que el
   // movimiento normal en vez de código nuevo (ver ejecutarSiguientePaso).
@@ -1671,6 +1751,9 @@ export default function PantallaJuego({ session }: { session: Session }) {
       .eq('id', progreso.id);
     if (errVida) setError(errVida.message);
   }
+
+
+
 
   // Reinicia el nivel desde cero: borra todo el inventario (salvo un Hacha
   // nueva, con la que el jugador siempre arranca), vuelve al spawn con la
@@ -2072,6 +2155,8 @@ export default function PantallaJuego({ session }: { session: Session }) {
             <TouchableOpacity style={styles.boton} onPress={() => setInventarioVisible(false)}>
               <Text style={styles.botonTexto}>Cerrar</Text>
             </TouchableOpacity>
+
+
           </View>
         </View>
       </Modal>
@@ -2166,6 +2251,40 @@ export default function PantallaJuego({ session }: { session: Session }) {
         </View>
       </Modal>
 
+      <Modal visible={modalCuerdaVisible} transparent animationType="fade" onRequestClose={() => setModalCuerdaVisible(false)}>
+        <View style={styles.modalFondoDerecha}>
+          <View style={styles.modalContenidoDerecha}>
+            <Text style={styles.modalTitulo}>
+              {tileActual?.tipo === 'montana' ? '¿Por qué lado querés bajar?' : '¿En qué montaña querés colocar la cuerda?'}
+            </Text>
+            <Text style={styles.modalVacio}>
+              {tileActual?.tipo === 'montana'
+                ? 'Elegí la casilla de arena a la que va a caer la cuerda:'
+                : 'Elegí hacia qué montaña colindante querés fijar la cuerda:'}
+            </Text>
+            {opcionesCuerda.map((opcion, index) => {
+              const objetivo = tileActual?.tipo === 'montana' ? opcion.suelo : opcion.montana;
+              const dirNombre = tileActual ? nombreDireccion(tileActual, objetivo) : `Opción ${index + 1}`;
+              return (
+                <TouchableOpacity
+                  key={`opcion-cuerda-${claveCoord(opcion.suelo)}_${claveCoord(opcion.montana)}`}
+                  style={[styles.boton, { marginBottom: 8 }]}
+                  onPress={() => confirmarColocarCuerda(opcion)}
+                >
+                  <Text style={styles.botonTexto}>{dirNombre}</Text>
+                </TouchableOpacity>
+              );
+            })}
+            <TouchableOpacity style={styles.botonCancelar} onPress={() => setModalCuerdaVisible(false)}>
+              <Text style={styles.botonCancelarTexto}>Cancelar</Text>
+            </TouchableOpacity>
+
+          </View>
+        </View>
+      </Modal>
+
+
+
       <GestureDetector gesture={gestoCompuesto}>
         <View
           style={styles.mapaContenedor}
@@ -2183,6 +2302,13 @@ export default function PantallaJuego({ session }: { session: Session }) {
               const esPuenteTile = tile.tipo === 'rio' && puentesConstruidos.has(clave);
               const relleno = revelada ? (esPuenteTile ? COLOR_PUENTE : colorTile(tile.tipo)) : '#1B2536';
               const textura = revelada ? (esPuenteTile ? TEXTURA_PUENTE : (mapaTexturas.get(clave) ?? null)) : null;
+              const esSueloCuerda = revelada && cuerdasConstruidas.some((c) => coordsIguales(c.suelo, tile));
+              const opcionCuerdaPar =
+                revelada && modalCuerdaVisible && tileActual
+                  ? opcionesCuerda.find((o) =>
+                      tileActual.tipo === 'montana' ? coordsIguales(o.suelo, tile) : coordsIguales(o.montana, tile)
+                    )
+                  : undefined;
 
               return (
                 <Fragment key={clave}>
@@ -2205,8 +2331,30 @@ export default function PantallaJuego({ session }: { session: Session }) {
                       />
                     </G>
                   )}
+                  {esSueloCuerda && (
+                    <G transform={`translate(${pixel.x},${pixel.y})`}>
+                      <Polygon
+                        points={ROMBO_BASE_POINTS}
+                        fill="rgba(123, 201, 111, 0.22)"
+                        stroke="#7BC96F"
+                        strokeWidth={2}
+                        strokeDasharray="4 2"
+                      />
+                      <Circle cx={0} cy={0} r={9} fill="#1D2A38" stroke="#7BC96F" strokeWidth={1.5} />
+                      <Path
+                        d="M-3,2 L0,-4 L3,2 M0,-4 L0,4"
+                        stroke="#7BC96F"
+                        strokeWidth={1.8}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </G>
+                  )}
                 </Fragment>
               );
+
+
+
             })}
 
             {/*
@@ -2291,7 +2439,45 @@ export default function PantallaJuego({ session }: { session: Session }) {
                 />
               );
             })()}
+
+            {modalCuerdaVisible && tileActual
+              ? opcionesCuerda.map((opcion) => {
+                  const targetCoord = tileActual.tipo === 'montana' ? opcion.suelo : opcion.montana;
+                  const targetTile = tilesPorClave.get(claveCoord(targetCoord));
+                  const pixel = isoAPixel(targetCoord, ANCHO_TILE, ALTO_TILE);
+                  const esMontana = targetTile?.tipo === 'montana';
+                  const offsetY = esMontana ? -32 : -16;
+                  const inicial = inicialesDireccion(tileActual, targetCoord);
+
+                  return (
+                    <G
+                      key={`badge-cuerda-${claveCoord(opcion.suelo)}_${claveCoord(opcion.montana)}`}
+                      transform={`translate(${pixel.x},${pixel.y + offsetY})`}
+                    >
+                      <Polygon
+                        points={ROMBO_BASE_POINTS}
+                        fill="rgba(244, 185, 63, 0.45)"
+                        stroke="#F4B93F"
+                        strokeWidth={3}
+                      />
+                      <Circle cx={0} cy={0} r={12} fill="#1D2A38" stroke="#F4B93F" strokeWidth={2} />
+                      <TextoSvg
+                        x={0}
+                        y={4}
+                        fill="#F4B93F"
+                        fontSize={12}
+                        fontWeight="900"
+                        textAnchor="middle"
+                      >
+                        {inicial}
+                      </TextoSvg>
+                    </G>
+                  );
+                })
+              : null}
+
           </Svg>
+
 
           {golpeCactus && <View pointerEvents="none" style={styles.flashDano} />}
 
@@ -2358,10 +2544,11 @@ export default function PantallaJuego({ session }: { session: Session }) {
             </TouchableOpacity>
           )}
           {mostrarBotonColocarCuerda && (
-            <TouchableOpacity style={styles.boton} onPress={colocarCuerda}>
+            <TouchableOpacity style={styles.boton} onPress={solicitarColocarCuerda}>
               <Text style={styles.botonTexto}>Colocar cuerda</Text>
             </TouchableOpacity>
           )}
+
           {mostrarBotonSubir && (
             <TouchableOpacity style={styles.boton} onPress={subirMontana}>
               <Text style={styles.botonTexto}>Subir montaña</Text>
@@ -2608,4 +2795,38 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 14,
   },
+  modalFondoDerecha: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.25)',
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+    paddingRight: 24,
+  },
+  modalContenidoDerecha: {
+    backgroundColor: '#1B2536',
+    borderRadius: 16,
+    padding: 20,
+    width: 260,
+    maxWidth: '85%',
+    borderWidth: 1,
+    borderColor: '#2C394D',
+  },
+  botonCancelar: {
+    backgroundColor: '#2C394D',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 6,
+    borderWidth: 1,
+    borderColor: '#4A5B73',
+  },
+  botonCancelarTexto: {
+    color: '#F6EFD8',
+    fontWeight: '700',
+    fontSize: 14,
+  },
 });
+
+

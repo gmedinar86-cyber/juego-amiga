@@ -361,7 +361,7 @@ function piezaPlano(base: Textura, escalaX: 1 | -1 = 1, escalaY: 1 | -1 = 1): Te
   const centroY = -ALTO_TILE / 2 + base.alto / 2;
   const flip =
     escalaX === -1 && escalaY === -1
-      ? `rotate(180, 0, ${centroY})`
+      ? `rotate(180, 0, 0)`
       : `translate(0,${centroY}) scale(${escalaX},${escalaY}) translate(0,${-centroY})`;
   return {
     fuente: base.fuente,
@@ -383,7 +383,7 @@ function piezaRotada(base: Textura, angulo: 90 | -90): Textura {
   return {
     fuente: base.fuente,
     alto: base.alto,
-    transform: `rotate(${angulo}) scale(${escalaCompX},${escalaCompY})`,
+    transform: `rotate(${angulo}, 0, 0) scale(${escalaCompX},${escalaCompY})`,
     centrado: true,
   };
 }

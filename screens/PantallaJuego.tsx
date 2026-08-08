@@ -851,6 +851,11 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const [ayudaVisible, setAyudaVisible] = useState(false);
   const [modalCuerdaVisible, setModalCuerdaVisible] = useState(false);
   const [opcionesCuerda, setOpcionesCuerda] = useState<CuerdaConstruida[]>([]);
+  const [modalAvisoInfo, setModalAvisoInfo] = useState<{ titulo: string; mensaje: string } | null>(null);
+
+  function mostrarAvisoModal(titulo: string, mensaje: string) {
+    setModalAvisoInfo({ titulo, mensaje });
+  }
 
   const [mensajeAccion, setMensajeAccion] = useState<string | null>(null);
   const [golpeCactus, setGolpeCactus] = useState(false);
@@ -1541,8 +1546,10 @@ export default function PantallaJuego({ session }: { session: Session }) {
     const { objetoId, cantidad } = tileActual.cofre;
     const objeto = catalogoObjetos.get(objetoId);
     if (objeto && !hayEspacioPara(inventario, catalogoObjetos, objeto.nombre, cantidad)) {
-      mostrarMensaje(`Inventario lleno de ${objeto.nombre}`);
-      agregarNotificacionFlotante(`⚠️ Inventario Lleno (${objeto.nombre})`, '#EF4444');
+      mostrarAvisoModal(
+        '⚠️ Inventario Lleno',
+        `No tienes espacio libre en el inventario para recolectar ${objeto.nombre}. Libera espacio antes de abrir el cofre.`
+      );
       return;
     }
 
@@ -1607,8 +1614,10 @@ export default function PantallaJuego({ session }: { session: Session }) {
     if (!objeto) return;
 
     if (!hayEspacioPara(inventario, catalogoObjetos, objeto.nombre)) {
-      mostrarMensaje(`Inventario lleno de ${objeto.nombre}`);
-      agregarNotificacionFlotante(`⚠️ Inventario Lleno (${objeto.nombre})`, '#EF4444');
+      mostrarAvisoModal(
+        '⚠️ Inventario Lleno',
+        `No tienes espacio libre en el inventario para recolectar ${objeto.nombre}. Libera espacio para poder guardar más objetos.`
+      );
       return;
     }
 
@@ -1705,20 +1714,26 @@ export default function PantallaJuego({ session }: { session: Session }) {
     const receta = RECETAS_CRAFTEO.find((r) => r.nombreObjeto === nombreObjeto);
     if (!receta) return;
     if (!tieneBancoDeTrabajo) {
-      mostrarMensaje('Necesitas un Banco de Trabajo');
-      agregarNotificacionFlotante('⚠️ Falta Banco de Trabajo', '#EF4444');
+      mostrarAvisoModal(
+        '⚠️ Requiere Banco de Trabajo',
+        `Para crear "${nombreObjeto}" necesitas estar parado junto a un Banco de Trabajo o tener uno en el terreno.`
+      );
       return;
     }
     if (!hayEspacioPara(inventario, catalogoObjetos, nombreObjeto)) {
-      mostrarMensaje(`Inventario lleno de ${nombreObjeto}`);
-      agregarNotificacionFlotante('⚠️ Inventario lleno', '#EF4444');
+      mostrarAvisoModal(
+        '⚠️ Inventario Lleno',
+        `No tienes espacio suficiente en el inventario para guardar ${nombreObjeto}.`
+      );
       return;
     }
     for (const { nombreMaterial, cantidad } of receta.costo) {
       const posees = cantidadDeObjeto(inventario, catalogoObjetos, nombreMaterial);
       if (posees < cantidad) {
-        mostrarMensaje(`Te falta ${nombreMaterial}`);
-        agregarNotificacionFlotante(`⚠️ Falta ${nombreMaterial} (${posees}/${cantidad})`, '#EF4444');
+        mostrarAvisoModal(
+          '⚠️ Materiales Insuficientes',
+          `Te faltan materiales para fabricar "${nombreObjeto}":\n- Tienes ${posees} de ${cantidad} de ${nombreMaterial}.`
+        );
         return;
       }
     }
@@ -1769,23 +1784,31 @@ export default function PantallaJuego({ session }: { session: Session }) {
     if (!objetivo) {
       const vecinoCualquiera = buscarVecinoRioSinPuente(origen, tilesPorClave, puentesConstruidos);
       if (!vecinoCualquiera) {
-        mostrarMensaje('Necesitas estar junto a un río para construir un puente');
-        agregarNotificacionFlotante('⚠️ Ponte junto a un Río', '#EF4444');
+        mostrarAvisoModal(
+          '⚠️ Ubicación no Válida',
+          'Para construir un puente debes estar parado justo al lado de una casilla de río.'
+        );
       } else {
-        mostrarMensaje('Ese tramo de río es muy ancho — buscá un tramo de 1 sola casilla');
-        agregarNotificacionFlotante('⚠️ Río muy ancho (máx 1 casilla)', '#EF4444');
+        mostrarAvisoModal(
+          '⚠️ Tramo de Río Muy Ancho',
+          'Este tramo de río es demasiado ancho. Busca un tramo de 1 sola casilla de ancho para colocar el puente.'
+        );
       }
       return;
     }
     if (!tieneBancoDeTrabajo) {
-      mostrarMensaje('Necesitas un banco de trabajo para construir un puente');
-      agregarNotificacionFlotante('⚠️ Falta Banco de Trabajo', '#EF4444');
+      mostrarAvisoModal(
+        '⚠️ Requiere Banco de Trabajo',
+        'Para construir un puente necesitas tener a tu lado un Banco de Trabajo.'
+      );
       return;
     }
     const cantidadMadera = cantidadDeObjeto(inventario, catalogoObjetos, 'Madera');
     if (cantidadMadera < COSTO_PUENTE_MADERA) {
-      mostrarMensaje(`Te faltan ${COSTO_PUENTE_MADERA - cantidadMadera} de madera para el puente`);
-      agregarNotificacionFlotante(`⚠️ Falta Madera (${cantidadMadera}/${COSTO_PUENTE_MADERA})`, '#EF4444');
+      mostrarAvisoModal(
+        '⚠️ Madera Insuficiente',
+        `Te faltan ${COSTO_PUENTE_MADERA - cantidadMadera} unidades de madera para construir el puente.\n- Tienes ${cantidadMadera} de ${COSTO_PUENTE_MADERA} Madera.`
+      );
       return;
     }
 
@@ -1841,27 +1864,35 @@ export default function PantallaJuego({ session }: { session: Session }) {
       tileActual.tipo === 'montana' ||
       vecinos(tileActual).some((v) => tilesPorClave.get(claveCoord(v))?.tipo === 'montana');
     if (!cercaDeMontana) {
-      mostrarMensaje('Necesitás estar junto a una montaña para usar la cuerda');
-      agregarNotificacionFlotante('⚠️ Ponte junto a una Montaña', '#EF4444');
+      mostrarAvisoModal(
+        '⚠️ Ubicación no Válida',
+        'Para colocar la cuerda debes estar parado justo al lado de una casilla de montaña.'
+      );
       return;
     }
 
     const cuerdaObjeto = Array.from(catalogoObjetos.values()).find((o) => o.nombre === 'Cuerda');
     const instancia = cuerdaObjeto ? inventario.find((item) => item.objeto_id === cuerdaObjeto.id) : undefined;
     if (!instancia) {
-      mostrarMensaje('Necesitás una Cuerda en el inventario');
-      agregarNotificacionFlotante('⚠️ Falta Cuerda en Inventario', '#EF4444');
+      mostrarAvisoModal(
+        '⚠️ Cuerda Faltante',
+        'Necesitas tener una Cuerda en tu inventario para poder colocarla.'
+      );
       return;
     }
 
     const opciones = buscarTodasLasOpcionesCuerda(tileActual, tilesPorClave, cuerdasConstruidas);
     if (opciones.length === 0) {
       if (tileActual.tipo === 'montana') {
-        mostrarMensaje('No hay ninguna casilla de arena vacía libre al lado para bajar la cuerda');
-        agregarNotificacionFlotante('⚠️ Sin casilla de arena libre al lado', '#EF4444');
+        mostrarAvisoModal(
+          '⚠️ Sin Espacio para Cuerda',
+          'No hay ninguna casilla de arena vacía libre al lado para descender la cuerda.'
+        );
       } else {
-        mostrarMensaje('No hay ninguna montaña libre al lado para colocar la cuerda');
-        agregarNotificacionFlotante('⚠️ Sin montaña libre al lado', '#EF4444');
+        mostrarAvisoModal(
+          '⚠️ Sin Espacio para Cuerda',
+          'No hay ninguna montaña libre al lado para colocar la cuerda.'
+        );
       }
       return;
     }
@@ -1880,8 +1911,10 @@ export default function PantallaJuego({ session }: { session: Session }) {
     const cuerdaObjeto = Array.from(catalogoObjetos.values()).find((o) => o.nombre === 'Cuerda');
     const instancia = cuerdaObjeto ? inventario.find((item) => item.objeto_id === cuerdaObjeto.id) : undefined;
     if (!instancia) {
-      mostrarMensaje('Necesitás una Cuerda en el inventario');
-      agregarNotificacionFlotante('⚠️ Falta Cuerda en Inventario', '#EF4444');
+      mostrarAvisoModal(
+        '⚠️ Cuerda Faltante',
+        'Necesitas tener una Cuerda en el inventario para poder colocarla.'
+      );
       return;
     }
 
@@ -2489,6 +2522,24 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
             <TouchableOpacity style={styles.boton} onPress={() => setAyudaVisible(false)}>
               <Text style={styles.botonTexto}>Cerrar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal explicativo para avisos de requisitos o materiales faltantes */}
+      <Modal
+        visible={modalAvisoInfo !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setModalAvisoInfo(null)}
+      >
+        <View style={styles.modalFondo}>
+          <View style={styles.modalContenidoAviso}>
+            <Text style={styles.modalAvisoTitulo}>{modalAvisoInfo?.titulo}</Text>
+            <Text style={styles.modalAvisoTexto}>{modalAvisoInfo?.mensaje}</Text>
+            <TouchableOpacity style={styles.modalBotonAceptar} onPress={() => setModalAvisoInfo(null)}>
+              <Text style={styles.modalBotonAceptarTexto}>Aceptar</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -3180,6 +3231,43 @@ const styles = StyleSheet.create({
     borderColor: '#EF4444',
     borderWidth: 6,
     zIndex: 9999,
+  },
+  modalContenidoAviso: {
+    backgroundColor: '#1E293B',
+    borderRadius: 18,
+    padding: 24,
+    width: '85%',
+    maxWidth: 420,
+    borderWidth: 1.5,
+    borderColor: '#38BDF8',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.5,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  modalAvisoTitulo: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#F8FAFC',
+    marginBottom: 12,
+  },
+  modalAvisoTexto: {
+    fontSize: 15,
+    color: '#CBD5E1',
+    lineHeight: 22,
+    marginBottom: 20,
+  },
+  modalBotonAceptar: {
+    backgroundColor: '#38BDF8',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  modalBotonAceptarTexto: {
+    color: '#0F172A',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
 });
 

@@ -15,6 +15,12 @@ function resolverFuenteImagen(fuente: any): any {
       if (typeof fuente.default.uri === 'string') return fuente.default.uri;
     }
   }
+  try {
+    const resolved = RNImage.resolveAssetSource(fuente);
+    if (resolved && resolved.uri) return resolved.uri;
+  } catch (e) {
+    // Fallback
+  }
   return fuente;
 }
 import type { Session } from '@supabase/supabase-js';

@@ -1030,28 +1030,29 @@ export default function PantallaJuego({ session }: { session: Session }) {
   // `destino` en DURACION_PASO_MS, con ease-out. Nunca se corta a medias:
   // una cancelación solo evita que se programe el paso siguiente.
   function animarPaso(destino: Coord, alTerminar: () => void) {
-    const origen = posicionVisualRef.current;
-    const inicio = Date.now();
+  const origen = posicionVisualRef.current;
+  const inicio = Date.now();
 
-    function frame() {
-      const t = Math.min((Date.now() - inicio) / DURACION_PASO_MS, 1);
-      const avance = easeOutCubic(t);
-      const actual: Coord = {
-        x: origen.x + (destino.x - origen.x) * avance,
-        y: origen.y + (destino.y - origen.y) * avance,
-      };
-      posicionVisualRef.current = actual;
-      setPosicionVisual(actual);
+  function frame() {
+    const t = Math.min((Date.now() - inicio) / DURACION_PASO_MS, 1);
+    const avance = easeOutCubic(t);
+    const actual: Coord = {
+      x: origen.x + (destino.x - origen.x) * avance,
+      y: origen.y + (destino.y - origen.y) * avance,
+    };
+    posicionVisualRef.current = actual;
+    setPosicionVisual(actual);
 
-      if (t < 1) {
-        rafIdRef.current = requestAnimationFrame(frame);
-      } else {
-        rafIdRef.current = null;
-        alTerminar();
-      }
+    if (t < 1) {
+      rafIdRef.current = requestAnimationFrame(frame);
+    } else {
+      rafIdRef.current = null;
+      // Esperar ~1 frame para que el renderizado se complete antes de continuar
+      setTimeout(alTerminar, 16);
     }
-    rafIdRef.current = requestAnimationFrame(frame);
   }
+  rafIdRef.current = requestAnimationFrame(frame);
+}
 
   // Se llama al terminar de animar un paso: confirma la posición, revela
   // niebla (radio 3 si el tile de llegada es montaña, si no 1), persiste en
@@ -2249,54 +2250,54 @@ const zoomMinimo = zoomMinimoFijo;
         >
           <Svg width="100%" height="100%" viewBox={geometria.viewBox} preserveAspectRatio="xMidYMid slice">
             {geometria.puntos.map(({ tile, pixel }) => {
-              const clave = claveCoord(tile);
-              const descubierta = descubiertas.has(clave);
-              const revelada = DEBUG_SIN_FOG || descubierta;
-              const sinCamino = casillaSinCamino === clave;
-              const puntosPoligono = esquinasRombo(pixel.x, pixel.y, ANCHO_TILE - 3, ALTO_TILE - 3);
+  const clave = claveCoord(tile);
+  const descubierta = descubiertas.has(clave);
+  const sinCamino = casillaSinCamino === clave;
+  const puntosPoligono = esquinasRombo(pixel.x, pixel.y, ANCHO_TILE - 3, ALTO_TILE - 3);
 
-              const esPuenteTile = tile.tipo === 'rio' && puentesConstruidos.has(clave);
-              const cuerdaEnEsteMontana =
-                tile.tipo === 'montana' ? cuerdasConstruidas.find((c) => coordsIguales(c.montana, tile)) : undefined;
-              const relleno = revelada ? (esPuenteTile ? COLOR_PUENTE : colorTile(tile.tipo)) : '#1B2536';
-              // Textura solo en tiles revelados — si se dibujara también en
-              // niebla, la silueta (montaña, río) se filtraría a través del
-              // fill oscuro de fog, que es una capa aparte con su propio alfa.
-              const textura = revelada
-                ? esPuenteTile
-                  ? TEXTURA_PUENTE
-                  : texturaParaTile(
-                      tile,
-                      tilesPorClave,
-                      recursosRecolectados.has(clave),
-                      cofresAbiertos.has(clave),
-                      cuerdaEnEsteMontana
-                    )
-                : null;
+  const esPuenteTile = tile.tipo === 'rio' && puentesConstruidos.has(clave);
+  const cuerdaEnEsteMontana =
+    tile.tipo === 'montana' ? cuerdasConstruidas.find((c) => coordsIguales(c.montana, tile)) : undefined;
+  
+  // USAR MEMO: solo cambiar si cambia la visibilidad o el tipo de tile
+  // La textura solo se calcula si está revelada
+  const textura = React.useMemo(() => {
+    if (!descubierta) return null;
+    if (esPuenteTile) return TEXTURA_PUENTE;
+    return texturaParaTile(
+      tile,
+      tilesPorClave,
+      recursosRecolectados.has(clave),
+      cofresAbiertos.has(clave),
+      cuerdaEnEsteMontana
+    );
+  }, [descubierta, esPuenteTile, tile, recursosRecolectados.has(clave), cofresAbiertos.has(clave), cuerdaEnEsteMontana]);
 
-              return (
-                <Fragment key={clave}>
-                  <Polygon
-                    points={puntosPoligono}
-                    fill={relleno}
-                    stroke={sinCamino ? '#E8746A' : '#2C394D'}
-                    strokeWidth={sinCamino ? 2.5 : 1}
-                  />
-                  {textura && (
-                    <G transform={`translate(${pixel.x},${pixel.y}) ${textura.transform ?? ''}`}>
-                      <ImagenSvg
-                        href={textura.fuente}
-                        x={-(textura.ancho ?? ANCHO_TILE) / 2}
-                        y={textura.centrado ? -textura.alto / 2 : -ALTO_TILE / 2}
-                        width={textura.ancho ?? ANCHO_TILE}
-                        height={textura.alto}
-                        preserveAspectRatio="xMidYMid meet"
-                      />
-                    </G>
-                  )}
-                </Fragment>
-              );
-            })}
+  const relleno = descubierta ? (esPuenteTile ? COLOR_PUENTE : colorTile(tile.tipo)) : '#1B2536';
+
+  return (
+    <Fragment key={clave}>
+      <Polygon
+        points={puntosPoligono}
+        fill={relleno}
+        stroke={sinCamino ? '#E8746A' : '#2C394D'}
+        strokeWidth={sinCamino ? 2.5 : 1}
+      />
+      {textura && (
+        <G transform={`translate(${pixel.x},${pixel.y}) ${textura.transform ?? ''}`}>
+          <ImagenSvg
+            href={textura.fuente}
+            x={-(textura.ancho ?? ANCHO_TILE) / 2}
+            y={textura.centrado ? -textura.alto / 2 : -ALTO_TILE / 2}
+            width={textura.ancho ?? ANCHO_TILE}
+            height={textura.alto}
+            preserveAspectRatio="xMidYMid meet"
+          />
+        </G>
+      )}
+    </Fragment>
+  );
+})}
 
             {/*
               Río revertido a relleno plano (colorTile) mientras se prepara

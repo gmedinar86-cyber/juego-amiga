@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Svg, { Circle, G, Image as ImagenSvg, Path, Polygon, Polyline, Text as TextoSvg } from 'react-native-svg';
+import Svg, { Circle, Ellipse, G, Image as ImagenSvg, Path, Polygon, Polyline, Text as TextoSvg } from 'react-native-svg';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import {
@@ -225,8 +225,17 @@ const TEXTURA_PUENTE_VOLTEADO = {
 // sí pisa la textura: se elige la variante según el LADO real por el que sale
 // la cuerda (hacia dónde queda el punto "suelo" respecto a esta montaña en
 // pantalla) — rope-1 sale por la izquierda, rope-2 por la derecha.
+function esCuerdaTrasera(cuerda: CuerdaConstruida): boolean {
+  const dx = cuerda.suelo.x - cuerda.montana.x;
+  const dy = cuerda.suelo.y - cuerda.montana.y;
+  return dx + dy < 0;
+}
+
 function texturaMontana(tile: TileBioma, cuerda?: CuerdaConstruida): Textura {
   if (cuerda) {
+    if (esCuerdaTrasera(cuerda)) {
+      return TEXTURA_MONTANA;
+    }
     const dx = cuerda.suelo.x - tile.x;
     const dy = cuerda.suelo.y - tile.y;
     const screenXDiff = dx - dy;
@@ -240,6 +249,7 @@ function texturaMontana(tile: TileBioma, cuerda?: CuerdaConstruida): Textura {
   }
   return TEXTURA_MONTANA;
 }
+
 
 
 // --- Río: autotiling con piezas direccionales ---
@@ -2364,6 +2374,19 @@ export default function PantallaJuego({ session }: { session: Session }) {
                       />
                     </G>
                   )}
+                  {(() => {
+                    const cMontana = tile.tipo === 'montana' ? cuerdasConstruidas.find((c) => coordsIguales(c.montana, tile)) : undefined;
+                    const esAtras = cMontana ? esCuerdaTrasera(cMontana) : false;
+                    if (!revelada || !esAtras) return null;
+                    return (
+                      <G transform={`translate(${pixel.x},${pixel.y - 28})`}>
+                        <Ellipse cx={0} cy={1} rx={8} ry={4.5} fill="rgba(0, 0, 0, 0.35)" />
+                        <Ellipse cx={0} cy={0} rx={8} ry={4} stroke="#F4B93F" strokeWidth={2.5} fill="none" strokeDasharray="5 2" />
+                        <Circle cx={0} cy={-2} r={2.5} fill="#F4B93F" stroke="#5C4018" strokeWidth={1} />
+                      </G>
+                    );
+                  })()}
+
                   {esSueloCuerda && (
                     <G transform={`translate(${pixel.x},${pixel.y})`}>
                       <Polygon

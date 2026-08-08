@@ -222,10 +222,11 @@ const TEXTURA_ROCA_MINERAL = conAlturaExtra(crearTextura(require('../assets/ento
 const TEXTURA_COFRE_CAJA = conBaseEnVertice(
   crearTextura(require('../assets/entorno/cofre limpio.png'), 1024, 1024)
 );
-// sheep.png tiene el mismo problema de margen que cactus.png (43px abajo
-// contra ~12px en los otros 3 bordes) — mismo fix.
-const TEXTURA_OVEJA = conBaseEnVertice(
+const TEXTURA_CAMELLO = conBaseEnVertice(
   crearTexturaEscalada(require('../assets/entorno/camello.png'), 1024, 1536, 0.70)
+);
+const TEXTURA_CAMELLO_LIMPIO = conBaseEnVertice(
+  crearTexturaEscalada(require('../assets/entorno/camello limpio.png'), 1024, 1536, 0.70)
 );
 
 const TEXTURA_ROCA_CLASE = conBaseEnVertice(
@@ -554,7 +555,7 @@ function texturaParaTile(
       // como arena plana.
       if (tile.cofre && !cofreAbierto) return TEXTURA_COFRE_CAJA;
       if (tile.recurso === 'piedra' && !recolectado) return TEXTURA_ROCA_MINERAL;
-      if (tile.recurso === 'lana' && !recolectado) return TEXTURA_OVEJA;
+      if (tile.recurso === 'lana') return recolectado ? TEXTURA_CAMELLO_LIMPIO : TEXTURA_CAMELLO;
       if (tile.recurso === 'madera' && !recolectado) return TEXTURA_ARBOL_SECO;
       return TEXTURA_ARENA;
     case 'rio':
@@ -718,7 +719,7 @@ function IconoHerramientaAccion({ tipo }: { tipo: 'talar' | 'picar' | 'esquilar'
 // DEBUG: muestra el bioma completo sin niebla, solo para esta fase de pruebas.
 // Solo afecta qué color se pinta — no toca `descubiertas` ni lo persistido en
 // descubrimiento_jugador. Volver a `false` cuando dejemos de necesitarlo.
-const DEBUG_SIN_FOG = true;
+const DEBUG_SIN_FOG = false;
 
 interface LimitesBioma {
   minX: number;
@@ -1316,27 +1317,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
         .eq('usuario_id', session.user.id);
       if (errInventario) throw errInventario;
 
-      // Otorgar Hacha, Pico y Tijeras en el inventario para probar todas las animaciones de acción
-      let inventarioFinal = inventarioData ?? [];
-      const nombresHerramientas = ['Hacha', 'Pico', 'Tijeras'];
-      for (const nombre of nombresHerramientas) {
-        const obj = Array.from(catalogo.values()).find((o) => o.nombre === nombre);
-        if (obj && !inventarioFinal.some((item) => item.objeto_id === obj.id)) {
-          const esDurable = HERRAMIENTAS_CON_DURABILIDAD.has(nombre);
-          const { data: herramientaNueva } = await supabase
-            .from('inventario_jugador')
-            .insert({
-              usuario_id: session.user.id,
-              objeto_id: obj.id,
-              usos_restantes: esDurable ? 50 : null,
-            })
-            .select()
-            .single();
-          if (herramientaNueva) {
-            inventarioFinal = [...inventarioFinal, herramientaNueva];
-          }
-        }
-      }
+      const inventarioFinal = inventarioData ?? [];
 
       const posicionInicial: Coord = { x: progresoData.posicion_q, y: progresoData.posicion_r };
       posicionVisualRef.current = posicionInicial;
@@ -2650,7 +2631,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
             <Text style={styles.modalSubtitulo}>Cuerda</Text>
             <Text style={styles.modalVacio}>
-              Se craftea con 3 de lana en el banco de trabajo. Para colocarla y subir, parate al lado de una montaña.
+              Se craftea con 3 trozos de cuerda en el banco de trabajo (saqueando camellos). Para colocarla y subir, parate al lado de una montaña.
               Para colocar una nueva cuerda que sirva para bajar, parate arriba de la montaña, al lado de una casilla
               de arena vacía (sin recurso ni cofre).
             </Text>
@@ -3080,7 +3061,9 @@ export default function PantallaJuego({ session }: { session: Session }) {
                 onPress={recolectar}
                 disabled={!recursoHabilitado}
               >
-                <Text style={styles.botonTexto}>Recolectar</Text>
+                <Text style={styles.botonTexto}>
+                  {tileActual?.recurso === 'lana' ? 'Saquear' : 'Recolectar'}
+                </Text>
               </TouchableOpacity>
               {!recursoHabilitado && (
                 <Text style={styles.textoFaltaHerramienta}>

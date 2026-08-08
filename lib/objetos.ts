@@ -25,6 +25,9 @@ export function recursosHabilitados(inventario: InventarioItem[], catalogo: Map<
     if (objeto?.tipo === 'herramienta' && objeto.efecto?.recolecta) {
       habilitados.add(objeto.efecto.recolecta);
     }
+    if (objeto?.nombre === 'Tijeras') {
+      habilitados.add('lana');
+    }
   }
   return habilitados;
 }
@@ -33,8 +36,14 @@ export function recursosHabilitados(inventario: InventarioItem[], catalogo: Map<
 // tile, por nombre (ej. tile.recurso === 'madera' -> objeto "Madera").
 export function objetoParaRecurso(catalogo: Map<string, Objeto>, recurso: string): Objeto | undefined {
   for (const objeto of catalogo.values()) {
-    if (objeto.tipo === 'material' && objeto.nombre.toLowerCase() === recurso.toLowerCase()) {
-      return objeto;
+    if (objeto.tipo === 'material') {
+      const nom = objeto.nombre.toLowerCase();
+      if (recurso.toLowerCase() === 'lana' && (nom === 'lana' || nom === 'trozo de cuerda')) {
+        return { ...objeto, nombre: 'Trozo de cuerda' };
+      }
+      if (nom === recurso.toLowerCase()) {
+        return objeto;
+      }
     }
   }
   return undefined;
@@ -43,6 +52,13 @@ export function objetoParaRecurso(catalogo: Map<string, Objeto>, recurso: string
 // La herramienta (tipo 'herramienta') requerida para recolectar un recurso,
 // usada solo para mostrar el nombre en el indicador de "falta herramienta".
 export function herramientaParaRecurso(catalogo: Map<string, Objeto>, recurso: string): Objeto | undefined {
+  if (recurso.toLowerCase() === 'lana') {
+    for (const objeto of catalogo.values()) {
+      if (objeto.tipo === 'herramienta' && objeto.nombre === 'Tijeras') {
+        return objeto;
+      }
+    }
+  }
   for (const objeto of catalogo.values()) {
     if (objeto.tipo === 'herramienta' && objeto.efecto?.recolecta === recurso) {
       return objeto;
@@ -58,6 +74,7 @@ const TOPES_INVENTARIO: Record<string, number> = {
   Piedra: 5,
   Madera: 15,
   Lana: 10,
+  'Trozo de cuerda': 10,
   Pico: 2,
   Hacha: 2,
   Cuerda: 2,
@@ -105,6 +122,6 @@ export interface RecetaCrafteo {
 export const RECETAS_CRAFTEO: RecetaCrafteo[] = [
   { nombreObjeto: 'Hacha', costo: [{ nombreMaterial: 'Piedra', cantidad: 1 }, { nombreMaterial: 'Madera', cantidad: 3 }] },
   { nombreObjeto: 'Pico', costo: [{ nombreMaterial: 'Piedra', cantidad: 1 }, { nombreMaterial: 'Madera', cantidad: 3 }] },
-  { nombreObjeto: 'Cuerda', costo: [{ nombreMaterial: 'Lana', cantidad: 3 }] },
+  { nombreObjeto: 'Cuerda', costo: [{ nombreMaterial: 'Trozo de cuerda', cantidad: 3 }] },
 ];
 

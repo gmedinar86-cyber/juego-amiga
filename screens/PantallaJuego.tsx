@@ -52,6 +52,8 @@ const SEMI_ALTO_BASE = CAMARA_RADIO * ALTO_TILE;
 const ZOOM_MIN_ABSOLUTO = 0.05;
 const ZOOM_MAX = 2.5;
 const MARGEN_ZOOM_ALEJADO = 1.15;
+const ROMBO_BASE_POINTS = esquinasRombo(0, 0, ANCHO_TILE - 3, ALTO_TILE - 3);
+
 
 // Placeholder visual: sprite frontal (no isométrico), solo para tener idea
 // de cómo se verá el personaje — no está pensado para encajar perfecto en
@@ -762,6 +764,9 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const golpeCactusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const muerteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ganasteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const persistirPendienteRef = useRef<{ posicion?: Coord; descubiertas?: Coord[] }>({});
+  const flushPersistenciaTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
 
   useEffect(() => {
     cameraOffsetRef.current = cameraOffset;
@@ -1095,25 +1100,49 @@ export default function PantallaJuego({ session }: { session: Session }) {
       const progresoActualizado = { ...progresoAnterior, posicion_q: destinoPaso.x, posicion_r: destinoPaso.y };
       progresoRef.current = progresoActualizado;
       setProgreso(progresoActualizado);
-
-      supabase
-        .from('progreso_jugador')
-        .update({ posicion_q: destinoPaso.x, posicion_r: destinoPaso.y })
-        .eq('id', progresoActualizado.id)
-        .then(({ error: errMover }) => {
-          if (errMover) setError(errMover.message);
-        });
     }
 
-    if (huboNuevoDescubrimiento && descubrimientoId) {
-      supabase
-        .from('descubrimiento_jugador')
-        .update({ casillas_descubiertas: Array.from(actualizadas.values()) })
-        .eq('id', descubrimientoId)
-        .then(({ error: errDesc }) => {
-          if (errDesc) setError(errDesc.message);
-        });
+    // Persistencia debounced para evitar micro-cortes por peticiones HTTP en cada paso
+    const esUltimoPaso = colaRef.current.length <= 1;
+    persistirPendienteRef.current = {
+      posicion: { x: destinoPaso.x, y: destinoPaso.y },
+      descubiertas: huboNuevoDescubrimiento ? Array.from(actualizadas.values()) : persistirPendienteRef.current.descubiertas,
+    };
+
+    if (flushPersistenciaTimeoutRef.current) {
+      clearTimeout(flushPersistenciaTimeoutRef.current);
+      flushPersistenciaTimeoutRef.current = null;
     }
+
+    const ejecutarFlushPersistencia = () => {
+      const { posicion, descubiertas: desc } = persistirPendienteRef.current;
+      if (posicion && progresoRef.current) {
+        supabase
+          .from('progreso_jugador')
+          .update({ posicion_q: posicion.x, posicion_r: posicion.y })
+          .eq('id', progresoRef.current.id)
+          .then(({ error: errMover }) => {
+            if (errMover) setError(errMover.message);
+          });
+      }
+      if (desc && descubrimientoId) {
+        supabase
+          .from('descubrimiento_jugador')
+          .update({ casillas_descubiertas: desc })
+          .eq('id', descubrimientoId)
+          .then(({ error: errDesc }) => {
+            if (errDesc) setError(errDesc.message);
+          });
+      }
+      persistirPendienteRef.current = {};
+    };
+
+    if (esUltimoPaso) {
+      ejecutarFlushPersistencia();
+    } else {
+      flushPersistenciaTimeoutRef.current = setTimeout(ejecutarFlushPersistencia, 500);
+    }
+
 
     // Llegar al portal termina el nivel: la posición/niebla ya se
     // persistieron arriba como cualquier paso normal, pero acá se corta la
@@ -1864,6 +1893,28 @@ export default function PantallaJuego({ session }: { session: Session }) {
     [gestoTap, gestoPan, gestoPinch]
   );
 
+  const mapaTexturas = useMemo(() => {
+    if (!bioma) return new Map<string, Textura | null>();
+    const mapa = new Map<string, Textura | null>();
+    for (const tile of bioma.tiles.tiles) {
+      const clave = claveCoord(tile);
+      const esPuenteTile = tile.tipo === 'rio' && puentesConstruidos.has(clave);
+      const cuerdaEnEsteMontana =
+        tile.tipo === 'montana' ? cuerdasConstruidas.find((c) => coordsIguales(c.montana, tile)) : undefined;
+      const tex = esPuenteTile
+        ? TEXTURA_PUENTE
+        : texturaParaTile(
+            tile,
+            tilesPorClave,
+            recursosRecolectados.has(clave),
+            cofresAbiertos.has(clave),
+            cuerdaEnEsteMontana
+          );
+      mapa.set(clave, tex);
+    }
+    return mapa;
+  }, [bioma, tilesPorClave, recursosRecolectados, cofresAbiertos, puentesConstruidos, cuerdasConstruidas]);
+
   const geometria = useMemo(() => {
     if (!bioma || !progreso || pixelesBioma.length === 0) return null;
 
@@ -2129,31 +2180,15 @@ export default function PantallaJuego({ session }: { session: Session }) {
               const descubierta = descubiertas.has(clave);
               const revelada = DEBUG_SIN_FOG || descubierta;
               const sinCamino = casillaSinCamino === clave;
-              const puntosPoligono = esquinasRombo(pixel.x, pixel.y, ANCHO_TILE - 3, ALTO_TILE - 3);
-
               const esPuenteTile = tile.tipo === 'rio' && puentesConstruidos.has(clave);
-              const cuerdaEnEsteMontana =
-                tile.tipo === 'montana' ? cuerdasConstruidas.find((c) => coordsIguales(c.montana, tile)) : undefined;
               const relleno = revelada ? (esPuenteTile ? COLOR_PUENTE : colorTile(tile.tipo)) : '#1B2536';
-              // Textura solo en tiles revelados — si se dibujara también en
-              // niebla, la silueta (montaña, río) se filtraría a través del
-              // fill oscuro de fog, que es una capa aparte con su propio alfa.
-              const textura = revelada
-                ? esPuenteTile
-                  ? TEXTURA_PUENTE
-                  : texturaParaTile(
-                      tile,
-                      tilesPorClave,
-                      recursosRecolectados.has(clave),
-                      cofresAbiertos.has(clave),
-                      cuerdaEnEsteMontana
-                    )
-                : null;
+              const textura = revelada ? (esPuenteTile ? TEXTURA_PUENTE : (mapaTexturas.get(clave) ?? null)) : null;
 
               return (
                 <Fragment key={clave}>
                   <Polygon
-                    points={puntosPoligono}
+                    points={ROMBO_BASE_POINTS}
+                    transform={`translate(${pixel.x},${pixel.y})`}
                     fill={relleno}
                     stroke={sinCamino ? '#E8746A' : '#2C394D'}
                     strokeWidth={sinCamino ? 2.5 : 1}
@@ -2286,59 +2321,59 @@ export default function PantallaJuego({ session }: { session: Session }) {
               </TouchableOpacity>
             </View>
           )}
-        </View>
-      </GestureDetector>
-
-      {(mostrarBotonCofre ||
-        mostrarBotonRecurso ||
-        mostrarBotonPuente ||
-        mostrarBotonColocarCuerda ||
-        mostrarBotonSubir ||
-        mostrarBotonBajar) && (
-        <View style={styles.accionesTile}>
-          {mostrarBotonCofre && (
-            <TouchableOpacity style={styles.boton} onPress={abrirCofre}>
-              <Text style={styles.botonTexto}>Abrir cofre</Text>
-            </TouchableOpacity>
-          )}
-          {mostrarBotonRecurso && (
-            <View>
-              <TouchableOpacity
-                style={[styles.boton, !recursoHabilitado && styles.botonDeshabilitado]}
-                onPress={recolectar}
-                disabled={!recursoHabilitado}
-              >
-                <Text style={styles.botonTexto}>Recolectar</Text>
-              </TouchableOpacity>
-              {!recursoHabilitado && (
-                <Text style={styles.textoFaltaHerramienta}>
-                  Necesitás: {herramientaFaltante?.nombre ?? 'una herramienta'}
-                </Text>
+          {(mostrarBotonCofre ||
+            mostrarBotonRecurso ||
+            mostrarBotonPuente ||
+            mostrarBotonColocarCuerda ||
+            mostrarBotonSubir ||
+            mostrarBotonBajar) && (
+            <View style={styles.accionesTile} pointerEvents="box-none">
+              {mostrarBotonCofre && (
+                <TouchableOpacity style={styles.boton} onPress={abrirCofre}>
+                  <Text style={styles.botonTexto}>Abrir cofre</Text>
+                </TouchableOpacity>
+              )}
+              {mostrarBotonRecurso && (
+                <View>
+                  <TouchableOpacity
+                    style={[styles.boton, !recursoHabilitado && styles.botonDeshabilitado]}
+                    onPress={recolectar}
+                    disabled={!recursoHabilitado}
+                  >
+                    <Text style={styles.botonTexto}>Recolectar</Text>
+                  </TouchableOpacity>
+                  {!recursoHabilitado && (
+                    <Text style={styles.textoFaltaHerramienta}>
+                      Necesitás: {herramientaFaltante?.nombre ?? 'una herramienta'}
+                    </Text>
+                  )}
+                </View>
+              )}
+              {mostrarBotonPuente && (
+                <TouchableOpacity style={styles.boton} onPress={construirPuente}>
+                  <Text style={styles.botonTexto}>Construir puente</Text>
+                </TouchableOpacity>
+              )}
+              {mostrarBotonColocarCuerda && (
+                <TouchableOpacity style={styles.boton} onPress={colocarCuerda}>
+                  <Text style={styles.botonTexto}>Colocar cuerda</Text>
+                </TouchableOpacity>
+              )}
+              {mostrarBotonSubir && (
+                <TouchableOpacity style={styles.boton} onPress={subirMontana}>
+                  <Text style={styles.botonTexto}>Subir montaña</Text>
+                </TouchableOpacity>
+              )}
+              {mostrarBotonBajar && (
+                <TouchableOpacity style={styles.boton} onPress={bajarMontana}>
+                  <Text style={styles.botonTexto}>Bajar montaña</Text>
+                </TouchableOpacity>
               )}
             </View>
           )}
-          {mostrarBotonPuente && (
-            <TouchableOpacity style={styles.boton} onPress={construirPuente}>
-              <Text style={styles.botonTexto}>Construir puente</Text>
-            </TouchableOpacity>
-          )}
-          {mostrarBotonColocarCuerda && (
-            <TouchableOpacity style={styles.boton} onPress={colocarCuerda}>
-              <Text style={styles.botonTexto}>Colocar cuerda</Text>
-            </TouchableOpacity>
-          )}
-          {mostrarBotonSubir && (
-            <TouchableOpacity style={styles.boton} onPress={subirMontana}>
-              <Text style={styles.botonTexto}>Subir montaña</Text>
-            </TouchableOpacity>
-          )}
-          {mostrarBotonBajar && (
-            <TouchableOpacity style={styles.boton} onPress={bajarMontana}>
-              <Text style={styles.botonTexto}>Bajar montaña</Text>
-            </TouchableOpacity>
-          )}
         </View>
-      )}
+      </GestureDetector>
+
 
       <Text style={styles.ayuda}>Toca una casilla ya descubierta para caminar hasta ahí. Arrastra para mirar el mapa.</Text>
     </View>
@@ -2505,11 +2540,17 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   accionesTile: {
+    position: 'absolute',
+    bottom: 16,
+    left: 0,
+    right: 0,
     flexDirection: 'row',
     justifyContent: 'center',
+    alignItems: 'center',
     gap: 12,
-    marginTop: 8,
+    zIndex: 20,
   },
+
   textoFaltaHerramienta: {
     color: '#E8746A',
     fontSize: 11,

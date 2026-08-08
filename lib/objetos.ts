@@ -105,5 +105,6 @@ export interface RecetaCrafteo {
 export const RECETAS_CRAFTEO: RecetaCrafteo[] = [
   { nombreObjeto: 'Hacha', costo: [{ nombreMaterial: 'Piedra', cantidad: 1 }, { nombreMaterial: 'Madera', cantidad: 3 }] },
   { nombreObjeto: 'Pico', costo: [{ nombreMaterial: 'Piedra', cantidad: 1 }, { nombreMaterial: 'Madera', cantidad: 3 }] },
-  { nombreObjeto: 'Cuerda', costo: [{ nombreMaterial: 'Lana', cantidad: 5 }] },
+  { nombreObjeto: 'Cuerda', costo: [{ nombreMaterial: 'Lana', cantidad: 3 }] },
 ];
+

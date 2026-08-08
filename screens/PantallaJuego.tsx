@@ -2232,10 +2232,11 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
             <Text style={styles.modalSubtitulo}>Cuerda</Text>
             <Text style={styles.modalVacio}>
-              Se craftea con 5 de lana en el banco de trabajo. Para colocarla y subir, parate al lado de una montaña.
+              Se craftea con 3 de lana en el banco de trabajo. Para colocarla y subir, parate al lado de una montaña.
               Para colocar una nueva cuerda que sirva para bajar, parate arriba de la montaña, al lado de una casilla
               de arena vacía (sin recurso ni cofre).
             </Text>
+
 
             <Text style={styles.modalSubtitulo}>Bajar de una montaña</Text>
             <Text style={styles.modalVacio}>

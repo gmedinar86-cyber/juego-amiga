@@ -1707,10 +1707,16 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
     if (usosNuevos <= 0) {
       setInventario((actual) => actual.filter((item) => item.id !== instancia.id));
-      mostrarMensaje(`Tu ${nombreHerramienta.toLowerCase()} se rompió y desapareció.`);
-      agregarNotificacionFlotante(`💥 ${nombreHerramienta} se rompió`, '#EF4444');
       const { error: errDelete } = await supabase.from('inventario_jugador').delete().eq('id', instancia.id);
       if (errDelete) setError(errDelete.message);
+
+      // Secuenciar el aviso modal 750ms después para dar tiempo a disfrutar la animación de recolección primero
+      setTimeout(() => {
+        mostrarAvisoModal(
+          `💥 ${nombreHerramienta} Rota`,
+          `Tu ${nombreHerramienta.toLowerCase()} ha consumido su último uso, se ha roto y ha desaparecido de tu inventario.`
+        );
+      }, 750);
       return;
     }
 
@@ -1718,8 +1724,13 @@ export default function PantallaJuego({ session }: { session: Session }) {
       actual.map((item) => (item.id === instancia.id ? { ...item, usos_restantes: usosNuevos } : item))
     );
     if (usosNuevos === 1) {
-      mostrarMensaje(`Tu ${nombreHerramienta.toLowerCase()} está a punto de romperse (1 uso restante)`);
-      agregarNotificacionFlotante(`⚠️ ${nombreHerramienta} (1 uso restante)`, '#F59E0B');
+      // Secuenciar el aviso modal 750ms después para no solapar con el +1 Objeto
+      setTimeout(() => {
+        mostrarAvisoModal(
+          `⚠️ ${nombreHerramienta} a Punto de Romperse`,
+          `Tu ${nombreHerramienta.toLowerCase()} está a punto de romperse (le queda solo 1 uso restante).`
+        );
+      }, 750);
     }
     const { error: errUpdate } = await supabase
       .from('inventario_jugador')

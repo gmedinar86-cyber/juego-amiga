@@ -334,7 +334,7 @@ const TEXTURA_RIO_ANCHO = conAlturaExtra(crearTextura(require('../assets/tiles/a
 
 const ESCALA_RIO = ANCHO_TILE / 226;
 const TEXTURA_RIO_FIN: Textura = conAlturaExtra({
-  fuente: require('../assets/tiles/fin.png'),
+  fuente: crearTextura(require('../assets/tiles/fin.png'), 238, 206).fuente,
   ancho: 238 * ESCALA_RIO,
   alto: 206 * ESCALA_RIO,
 });

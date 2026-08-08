@@ -1030,227 +1030,115 @@ export default function PantallaJuego({ session }: { session: Session }) {
   // `destino` en DURACION_PASO_MS, con ease-out. Nunca se corta a medias:
   // una cancelación solo evita que se programe el paso siguiente.
   function animarPaso(destino: Coord, alTerminar: () => void) {
-  const origen = posicionVisualRef.current;
-  const inicio = Date.now();
+    const origen = posicionVisualRef.current;
+    const inicio = Date.now();
 
-  function frame() {
-    const t = Math.min((Date.now() - inicio) / DURACION_PASO_MS, 1);
-    const avance = easeOutCubic(t);
-    const actual: Coord = {
-      x: origen.x + (destino.x - origen.x) * avance,
-      y: origen.y + (destino.y - origen.y) * avance,
-    };
-    posicionVisualRef.current = actual;
-    setPosicionVisual(actual);
+    function frame() {
+      const t = Math.min((Date.now() - inicio) / DURACION_PASO_MS, 1);
+      const avance = easeOutCubic(t);
+      const actual: Coord = {
+        x: origen.x + (destino.x - origen.x) * avance,
+        y: origen.y + (destino.y - origen.y) * avance,
+      };
+      posicionVisualRef.current = actual;
+      setPosicionVisual(actual);
 
-    if (t < 1) {
-      rafIdRef.current = requestAnimationFrame(frame);
-    } else {
-      rafIdRef.current = null;
-      // Esperar ~1 frame para que el renderizado se complete antes de continuar
-      setTimeout(alTerminar, 16);
+      if (t < 1) {
+        rafIdRef.current = requestAnimationFrame(frame);
+      } else {
+        rafIdRef.current = null;
+        alTerminar();
+      }
     }
+    rafIdRef.current = requestAnimationFrame(frame);
   }
-  rafIdRef.current = requestAnimationFrame(frame);
-}
 
   // Se llama al terminar de animar un paso: confirma la posición, revela
   // niebla (radio 3 si el tile de llegada es montaña, si no 1), persiste en
   // Supabase (fire-and-forget) y sigue con el próximo paso de la cola, si
   // quedó alguno tras un posible redirect.
-// ============================================================
-// NUEVAS FUNCIONES PARA REVELADO PROGRESIVO DE NIEBLA
-// ============================================================
+  function completarPaso(destinoPaso: Coord) {
+    if (!bioma) return;
+    const tileDestino = tilesPorClave.get(claveCoord(destinoPaso));
 
-// Obtiene las casillas que se van a revelar (sin modificar el estado)
-function obtenerCasillasEnRadio(
-  centro: Coord,
-  radio: number,
-  tilesPorClaveMap: Map<string, TileBioma>,
-  predicado?: (t: TileBioma) => boolean
-): Coord[] {
-  const resultado: Coord[] = [];
-  const actuales = descubiertasRef.current;
-  
-  const alcanzables = tilesAlcanzables(centro, radio, tilesPorClaveMap, predicado || (() => true));
-  for (const c of alcanzables) {
-    const clave = claveCoord(c);
-    if (!actuales.has(clave)) {
-      resultado.push(c);
+    if (tileDestino?.tipo === 'cactus') {
+      const casillaAnterior = progresoRef.current
+        ? { x: progresoRef.current.posicion_q, y: progresoRef.current.posicion_r }
+        : destinoPaso;
+      golpearCactus(casillaAnterior);
+      return;
     }
-  }
-  return resultado;
-}
 
-// Revela casillas en lotes pequeños, SIN actualizar el estado de zoom
-function revelarProgresivamente(
-  nuevasCasillas: Coord[],
-  alTerminar: () => void,
-  tilesPorClaveMap: Map<string, TileBioma>
-) {
-  if (nuevasCasillas.length === 0) {
-    alTerminar();
-    return;
-  }
+    const enMontana = tileDestino?.tipo === 'montana';
+    const radio = enMontana ? RADIO_VISION_MONTANA : RADIO_VISION_DEFAULT;
+    // El predicado por defecto de fusionarDescubiertas (transitabilidad de
+    // suelo) excluye 'montana' — si se usara acá, el BFS de revelado ni
+    // siquiera podría expandirse desde el propio tile donde está parado el
+    // jugador (radio 3 quedaría en los hechos como radio 0). Parado en una
+    // montaña, el radio se expande a través del cúmulo de montaña conectado,
+    // igual que ya restringe el movimiento por tap (ver iniciarCaminoHacia).
+    const predicadoVision = enMontana ? (t: TileBioma) => t.tipo === 'montana' : undefined;
 
-  // Separar por tipo de renderizado
-  const livianas: Coord[] = [];
-  const pesadas: Coord[] = [];
-  const TIPOS_LIVIANOS = new Set(['arena', 'rio']);
-  
-  for (const coord of nuevasCasillas) {
-    const tile = tilesPorClaveMap.get(claveCoord(coord));
-    if (tile && TIPOS_LIVIANOS.has(tile.tipo)) {
-      livianas.push(coord);
+    const actualizadas = fusionarDescubiertas(
+      descubiertasRef.current,
+      destinoPaso,
+      tilesPorClave,
+      radio,
+      predicadoVision
+    );
+    const huboNuevoDescubrimiento = actualizadas.size !== descubiertasRef.current.size;
+    descubiertasRef.current = actualizadas;
+    setDescubiertas(actualizadas);
+
+    const progresoAnterior = progresoRef.current;
+    if (progresoAnterior) {
+      const progresoActualizado = { ...progresoAnterior, posicion_q: destinoPaso.x, posicion_r: destinoPaso.y };
+      progresoRef.current = progresoActualizado;
+      setProgreso(progresoActualizado);
+
+      supabase
+        .from('progreso_jugador')
+        .update({ posicion_q: destinoPaso.x, posicion_r: destinoPaso.y })
+        .eq('id', progresoActualizado.id)
+        .then(({ error: errMover }) => {
+          if (errMover) setError(errMover.message);
+        });
+    }
+
+    if (huboNuevoDescubrimiento && descubrimientoId) {
+      supabase
+        .from('descubrimiento_jugador')
+        .update({ casillas_descubiertas: Array.from(actualizadas.values()) })
+        .eq('id', descubrimientoId)
+        .then(({ error: errDesc }) => {
+          if (errDesc) setError(errDesc.message);
+        });
+    }
+
+    // Llegar al portal termina el nivel: la posición/niebla ya se
+    // persistieron arriba como cualquier paso normal, pero acá se corta la
+    // cola (no tiene sentido seguir caminando) y se muestra el festejo,
+    // seguido del mismo diálogo de "¿reiniciar el nivel?" que el botón
+    // manual — el jugador decide si empieza de nuevo.
+    if (tileDestino?.tipo === 'portal') {
+      colaRef.current = [];
+      setCaminando(false);
+      setGanasteVisible(true);
+      if (ganasteTimeoutRef.current) clearTimeout(ganasteTimeoutRef.current);
+      ganasteTimeoutRef.current = setTimeout(() => {
+        setGanasteVisible(false);
+        setResetVisible(true);
+      }, GANASTE_MS);
+      return;
+    }
+
+    colaRef.current.shift();
+    if (colaRef.current.length > 0) {
+      ejecutarSiguientePaso();
     } else {
-      pesadas.push(coord);
+      setCaminando(false);
     }
   }
-
-  // FASE 1: Revelar TODAS las livianas de una vez
-  if (livianas.length > 0) {
-    const nuevasDescubiertas = new Map(descubiertasRef.current);
-    for (const coord of livianas) {
-      nuevasDescubiertas.set(claveCoord(coord), coord);
-    }
-    descubiertasRef.current = nuevasDescubiertas;
-    setDescubiertas(nuevasDescubiertas);
-  }
-
-  // FASE 2: Revelar pesadas una por una
-  if (pesadas.length === 0) {
-    // Esperar un frame para que se estabilice el renderizado
-    requestAnimationFrame(() => {
-      setTimeout(alTerminar, 50);
-    });
-    return;
-  }
-
-  let index = 0;
-  const DELAY_MS = 80; // Delay entre cada casilla pesada
-
-  function revelarSiguientePesada() {
-    const batch = pesadas.slice(index, index + 1); // Una por una
-    const nuevasDescubiertas = new Map(descubiertasRef.current);
-    
-    for (const coord of batch) {
-      nuevasDescubiertas.set(claveCoord(coord), coord);
-    }
-    
-    descubiertasRef.current = nuevasDescubiertas;
-    setDescubiertas(nuevasDescubiertas);
-    
-    index += 1;
-    
-    if (index < pesadas.length) {
-      // Usar setTimeout para dar tiempo al renderizado
-      setTimeout(revelarSiguientePesada, DELAY_MS);
-    } else {
-      // Esperar un frame extra para que se estabilice todo
-      requestAnimationFrame(() => {
-        setTimeout(alTerminar, 50);
-      });
-    }
-  }
-  
-  // Empezar con las pesadas después de un pequeño delay
-  setTimeout(revelarSiguientePesada, 80);
-}
-
-// Continúa después de revelar la niebla (sin afectar el zoom)
-function continuarDespuesDeRevelar(destinoPaso: Coord, tileDestino: TileBioma | undefined) {
-  // Persistir en Supabase
-  const progresoAnterior = progresoRef.current;
-  if (progresoAnterior) {
-    const progresoActualizado = { ...progresoAnterior, posicion_q: destinoPaso.x, posicion_r: destinoPaso.y };
-    progresoRef.current = progresoActualizado;
-    setProgreso(progresoActualizado);
-
-    supabase
-      .from('progreso_jugador')
-      .update({ posicion_q: destinoPaso.x, posicion_r: destinoPaso.y })
-      .eq('id', progresoActualizado.id)
-      .then(({ error: errMover }) => {
-        if (errMover) setError(errMover.message);
-      });
-  }
-
-  if (descubrimientoId) {
-    supabase
-      .from('descubrimiento_jugador')
-      .update({ casillas_descubiertas: Array.from(descubiertasRef.current.values()) })
-      .eq('id', descubrimientoId)
-      .then(({ error: errDesc }) => {
-        if (errDesc) setError(errDesc.message);
-      });
-  }
-
-  // Verificar si llegó al portal
-  if (tileDestino?.tipo === 'portal') {
-    colaRef.current = [];
-    setCaminando(false);
-    setGanasteVisible(true);
-    if (ganasteTimeoutRef.current) clearTimeout(ganasteTimeoutRef.current);
-    ganasteTimeoutRef.current = setTimeout(() => {
-      setGanasteVisible(false);
-      setResetVisible(true);
-    }, GANASTE_MS);
-    return;
-  }
-
-  // Continuar con el siguiente paso
-  colaRef.current.shift();
-  if (colaRef.current.length > 0) {
-    ejecutarSiguientePaso();
-  } else {
-    setCaminando(false);
-  }
-}
-
-// NUEVA VERSIÓN DE completarPaso CON REVELADO PROGRESIVO Y ZOOM FIJADO
-function completarPaso(destinoPaso: Coord) {
-  if (!bioma) return;
-  const tileDestino = tilesPorClave.get(claveCoord(destinoPaso));
-
-  // Si es cactus, no revelamos niebla, solo aplicamos el daño
-  if (tileDestino?.tipo === 'cactus') {
-    const casillaAnterior = progresoRef.current
-      ? { x: progresoRef.current.posicion_q, y: progresoRef.current.posicion_r }
-      : destinoPaso;
-    golpearCactus(casillaAnterior);
-    return;
-  }
-
-  const enMontana = tileDestino?.tipo === 'montana';
-  const radio = enMontana ? RADIO_VISION_MONTANA : RADIO_VISION_DEFAULT;
-  const predicadoVision = enMontana ? (t: TileBioma) => t.tipo === 'montana' : undefined;
-
-  // Obtener SOLO las casillas nuevas que se van a revelar
-  const nuevasCasillas = obtenerCasillasEnRadio(
-    destinoPaso,
-    radio,
-    tilesPorClave,
-    predicadoVision
-  );
-
-  // Si no hay casillas nuevas, continuar directamente
-  if (nuevasCasillas.length === 0) {
-    continuarDespuesDeRevelar(destinoPaso, tileDestino);
-    return;
-  }
-
-  // Revelar progresivamente
-  revelarProgresivamente(
-    nuevasCasillas,
-    () => {
-      continuarDespuesDeRevelar(destinoPaso, tileDestino);
-    },
-    tilesPorClave
-  );
-}
-// ============================================================
-// FIN DE LAS NUEVAS FUNCIONES
-// ============================================================
 
   // Tocar un cactus resta vida y hace retroceder al jugador a la casilla
   // anterior en vez de asentarlo ahí — corta cualquier paso encolado (no
@@ -1299,13 +1187,10 @@ function completarPaso(destinoPaso: Coord) {
   }
 
   function ejecutarSiguientePaso() {
-  const destino = colaRef.current[0];
-  if (!destino) return;
-  // Pequeña pausa para que el renderizado se complete entre pasos
-  setTimeout(() => {
+    const destino = colaRef.current[0];
+    if (!destino) return;
     animarPaso(destino, () => completarPaso(destino));
-  }, 5);
-}
+  }
 
   // Punto de entrada del tap sobre una casilla descubierta: calcula el
   // camino con BFS y lo agenda. Si ya hay un camino en curso, el tap actúa
@@ -1845,20 +1730,7 @@ function completarPaso(destinoPaso: Coord) {
     limitesRef.current = limitesBioma;
   }, [limitesBioma]);
 
-  // Guardamos el zoom mínimo para que no se re-calcule constantemente
-const [zoomMinimoFijo, setZoomMinimoFijo] = useState(ZOOM_MIN_ABSOLUTO);
-
-// Solo calculamos el zoom mínimo UNA VEZ al cargar el bioma
-useEffect(() => {
-  if (limitesBioma) {
-    const nuevoMinimo = calcularZoomMinimo(limitesBioma);
-    setZoomMinimoFijo(nuevoMinimo);
-    setZoom((z) => Math.max(z, nuevoMinimo));
-  }
-}, [limitesBioma]); // <-- Esto solo se ejecuta cuando cambia el bioma, NO cuando se revela niebla
-
-// Usa zoomMinimoFijo en lugar de zoomMinimo
-const zoomMinimo = zoomMinimoFijo;
+  const zoomMinimo = useMemo(() => calcularZoomMinimo(limitesBioma), [limitesBioma]);
 
   useEffect(() => {
     zoomMinRef.current = zoomMinimo;
@@ -2253,54 +2125,54 @@ const zoomMinimo = zoomMinimoFijo;
         >
           <Svg width="100%" height="100%" viewBox={geometria.viewBox} preserveAspectRatio="xMidYMid slice">
             {geometria.puntos.map(({ tile, pixel }) => {
-  const clave = claveCoord(tile);
-  const descubierta = descubiertas.has(clave);
-  const sinCamino = casillaSinCamino === clave;
-  const puntosPoligono = esquinasRombo(pixel.x, pixel.y, ANCHO_TILE - 3, ALTO_TILE - 3);
+              const clave = claveCoord(tile);
+              const descubierta = descubiertas.has(clave);
+              const revelada = DEBUG_SIN_FOG || descubierta;
+              const sinCamino = casillaSinCamino === clave;
+              const puntosPoligono = esquinasRombo(pixel.x, pixel.y, ANCHO_TILE - 3, ALTO_TILE - 3);
 
-  const esPuenteTile = tile.tipo === 'rio' && puentesConstruidos.has(clave);
-  const cuerdaEnEsteMontana =
-    tile.tipo === 'montana' ? cuerdasConstruidas.find((c) => coordsIguales(c.montana, tile)) : undefined;
-  
-  // USAR MEMO: solo cambiar si cambia la visibilidad o el tipo de tile
-  // La textura solo se calcula si está revelada
-  const textura = React.useMemo(() => {
-    if (!descubierta) return null;
-    if (esPuenteTile) return TEXTURA_PUENTE;
-    return texturaParaTile(
-      tile,
-      tilesPorClave,
-      recursosRecolectados.has(clave),
-      cofresAbiertos.has(clave),
-      cuerdaEnEsteMontana
-    );
-  }, [descubierta, esPuenteTile, tile, recursosRecolectados.has(clave), cofresAbiertos.has(clave), cuerdaEnEsteMontana]);
+              const esPuenteTile = tile.tipo === 'rio' && puentesConstruidos.has(clave);
+              const cuerdaEnEsteMontana =
+                tile.tipo === 'montana' ? cuerdasConstruidas.find((c) => coordsIguales(c.montana, tile)) : undefined;
+              const relleno = revelada ? (esPuenteTile ? COLOR_PUENTE : colorTile(tile.tipo)) : '#1B2536';
+              // Textura solo en tiles revelados — si se dibujara también en
+              // niebla, la silueta (montaña, río) se filtraría a través del
+              // fill oscuro de fog, que es una capa aparte con su propio alfa.
+              const textura = revelada
+                ? esPuenteTile
+                  ? TEXTURA_PUENTE
+                  : texturaParaTile(
+                      tile,
+                      tilesPorClave,
+                      recursosRecolectados.has(clave),
+                      cofresAbiertos.has(clave),
+                      cuerdaEnEsteMontana
+                    )
+                : null;
 
-  const relleno = descubierta ? (esPuenteTile ? COLOR_PUENTE : colorTile(tile.tipo)) : '#1B2536';
-
-  return (
-    <Fragment key={clave}>
-      <Polygon
-        points={puntosPoligono}
-        fill={relleno}
-        stroke={sinCamino ? '#E8746A' : '#2C394D'}
-        strokeWidth={sinCamino ? 2.5 : 1}
-      />
-      {textura && (
-        <G transform={`translate(${pixel.x},${pixel.y}) ${textura.transform ?? ''}`}>
-          <ImagenSvg
-            href={textura.fuente}
-            x={-(textura.ancho ?? ANCHO_TILE) / 2}
-            y={textura.centrado ? -textura.alto / 2 : -ALTO_TILE / 2}
-            width={textura.ancho ?? ANCHO_TILE}
-            height={textura.alto}
-            preserveAspectRatio="xMidYMid meet"
-          />
-        </G>
-      )}
-    </Fragment>
-  );
-})}
+              return (
+                <Fragment key={clave}>
+                  <Polygon
+                    points={puntosPoligono}
+                    fill={relleno}
+                    stroke={sinCamino ? '#E8746A' : '#2C394D'}
+                    strokeWidth={sinCamino ? 2.5 : 1}
+                  />
+                  {textura && (
+                    <G transform={`translate(${pixel.x},${pixel.y}) ${textura.transform ?? ''}`}>
+                      <ImagenSvg
+                        href={textura.fuente}
+                        x={-(textura.ancho ?? ANCHO_TILE) / 2}
+                        y={textura.centrado ? -textura.alto / 2 : -ALTO_TILE / 2}
+                        width={textura.ancho ?? ANCHO_TILE}
+                        height={textura.alto}
+                        preserveAspectRatio="xMidYMid meet"
+                      />
+                    </G>
+                  )}
+                </Fragment>
+              );
+            })}
 
             {/*
               Río revertido a relleno plano (colorTile) mientras se prepara

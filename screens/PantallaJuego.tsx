@@ -310,6 +310,27 @@ const CONFIG_RIO_PRUEBA: Record<string, ConfigRioPrueba> = {
   '29,18': { bordes: ['NE', 'SW'] },
 };
 
+function resolverBordesRio(tile: TileBioma, tilesPorClave: Map<string, TileBioma>): Borde[] {
+  const bordes: Borde[] = [];
+  const deltaBordes: Record<Borde, Coord> = {
+    NE: { x: 0, y: -1 },
+    SE: { x: 1, y: 0 },
+    SW: { x: 0, y: 1 },
+    NW: { x: -1, y: 0 },
+  };
+
+  (Object.keys(deltaBordes) as Borde[]).forEach((borde) => {
+    const delta = deltaBordes[borde];
+    const vecinoClave = claveCoord({ x: tile.x + delta.x, y: tile.y + delta.y });
+    const vecino = tilesPorClave.get(vecinoClave);
+    if (!vecino || vecino.tipo !== 'rio') {
+      bordes.push(borde);
+    }
+  });
+
+  return bordes;
+}
+
 const BORDE_DELTA: Record<Borde, Coord> = {
   NE: { x: 0, y: -1 },
   SE: { x: 1, y: 0 },
@@ -2640,9 +2661,9 @@ export default function PantallaJuego({ session }: { session: Session }) {
                     )
                   : undefined;
 
-              const configRioPrueba = CONFIG_RIO_PRUEBA[clave];
-              const esRioPrueba = Boolean(configRioPrueba);
-              const rellenoFinal = esRioPrueba ? '#3B8EC2' : relleno;
+              const esRioTile = tile.tipo === 'rio' && !esPuenteTile && revelada;
+              const bordesRioCalculados = esRioTile ? (CONFIG_RIO_PRUEBA[clave]?.bordes ?? resolverBordesRio(tile, tilesPorClave)) : [];
+              const rellenoFinal = esRioTile ? '#3B8EC2' : relleno;
 
               return (
                 <Fragment key={clave}>
@@ -2654,25 +2675,25 @@ export default function PantallaJuego({ session }: { session: Session }) {
                     strokeWidth={sinCamino ? 2.5 : 0}
                   />
 
-                  {configRioPrueba && (
+                  {esRioTile && bordesRioCalculados.length > 0 && (
                     <G transform={`translate(${pixel.x},${pixel.y})`}>
-                      {configRioPrueba.bordes.includes('NW') && (
+                      {bordesRioCalculados.includes('NW') && (
                         <Path d="M -36,0 L 0,-18" stroke="#946E2E" strokeWidth={3.5} strokeLinecap="round" />
                       )}
-                      {configRioPrueba.bordes.includes('NE') && (
+                      {bordesRioCalculados.includes('NE') && (
                         <Path d="M 0,-18 L 36,0" stroke="#946E2E" strokeWidth={3.5} strokeLinecap="round" />
                       )}
-                      {configRioPrueba.bordes.includes('SE') && (
+                      {bordesRioCalculados.includes('SE') && (
                         <Path d="M 36,0 L 0,18" stroke="#946E2E" strokeWidth={3.5} strokeLinecap="round" />
                       )}
-                      {configRioPrueba.bordes.includes('SW') && (
+                      {bordesRioCalculados.includes('SW') && (
                         <Path d="M 0,18 L -36,0" stroke="#946E2E" strokeWidth={3.5} strokeLinecap="round" />
                       )}
                     </G>
                   )}
 
 
-                  {textura && textura !== TEXTURA_ARENA && !esRioPrueba && (() => {
+                  {textura && textura !== TEXTURA_ARENA && !esRioTile && (() => {
                     const animActiva = animacionesAccion.find(
                       (a) => a.tileX === tile.x && a.tileY === tile.y && Date.now() - a.inicioMs < a.duracionMs
                     );

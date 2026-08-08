@@ -15,6 +15,7 @@ import {
   type Coord,
 } from '../lib/isoGrid';
 import { esTransitable } from '../lib/generadorTerreno';
+import { MAPA_DESIERTO_FIJO } from '../lib/mapaFijo';
 import { encontrarCamino, tilesAlcanzables } from '../lib/pathfinding';
 import {
   cantidadDeObjeto,
@@ -1097,20 +1098,11 @@ export default function PantallaJuego({ session }: { session: Session }) {
         .single();
       if (errBioma2) throw errBioma2;
 
-      let biomaFinal = biomaData;
-      if (Platform.OS === 'web') {
-        const localGuardado = localStorage.getItem('MAPA_EDITADO_LOCAL');
-        if (localGuardado) {
-          try {
-            const parsed = JSON.parse(localGuardado);
-            if (parsed?.tiles?.tiles) {
-              biomaFinal = parsed;
-            }
-          } catch (e) {
-            console.error('[EDITOR-LOCAL] Error leyendo mapa local:', e);
-          }
-        }
-      }
+      // Garantizar que el mapa personalizado editado (MAPA_DESIERTO_FIJO) se use en todas las plataformas (Móvil y Web)
+      const biomaFinal = {
+        ...biomaData,
+        tiles: MAPA_DESIERTO_FIJO,
+      };
 
       const { data: descData, error: errDesc } = await supabase
         .from('descubrimiento_jugador')

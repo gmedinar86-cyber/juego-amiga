@@ -7,14 +7,6 @@ function resolverFuenteImagen(fuente: any): any {
   if (!fuente) return undefined;
   if (typeof fuente === 'string') return fuente;
   if (fuente && typeof fuente === 'object' && typeof fuente.default === 'string') return fuente.default;
-  try {
-    if (typeof RNImage?.resolveAssetSource === 'function') {
-      const resolved = RNImage.resolveAssetSource(fuente);
-      if (resolved?.uri) return resolved.uri;
-    }
-  } catch (e) {
-    // Fallback silencioso
-  }
   return fuente;
 }
 import type { Session } from '@supabase/supabase-js';
@@ -353,7 +345,10 @@ function piezaPlano(base: Textura, escalaX: 1 | -1 = 1, escalaY: 1 | -1 = 1): Te
   const baseTransform = base.transform ?? '';
   if (escalaX === 1 && escalaY === 1) return { fuente: base.fuente, alto: base.alto, ancho: base.ancho, transform: baseTransform };
   const centroY = -ALTO_TILE / 2 + base.alto / 2;
-  const flip = `translate(0,${centroY}) scale(${escalaX},${escalaY}) translate(0,${-centroY})`;
+  const flip =
+    escalaX === -1 && escalaY === -1
+      ? `rotate(180, 0, ${centroY})`
+      : `translate(0,${centroY}) scale(${escalaX},${escalaY}) translate(0,${-centroY})`;
   return {
     fuente: base.fuente,
     alto: base.alto,

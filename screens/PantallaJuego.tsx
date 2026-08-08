@@ -310,30 +310,18 @@ function verticeDesdeBordes(a: Borde, b: Borde): Vertice {
   return entrada![0];
 }
 
-const TEXTURA_RIO_RECTO_NESW = crearTextura(require('../assets/tiles/recto-nesw.png'), 226, 168);
-const TEXTURA_RIO_RECTO_NWSE = crearTextura(require('../assets/tiles/recto-nwse.png'), 226, 168);
-const TEXTURA_RIO_ESQUINA = crearTextura(require('../assets/tiles/esquina.png'), 226, 166);
-const TEXTURA_RIO_CONFLUENCIA = crearTextura(require('../assets/tiles/confluencia-4.png'), 226, 168);
-const TEXTURA_RIO_ANCHO = crearTextura(require('../assets/tiles/ancho.png'), 226, 167);
+const TEXTURA_RIO_RECTO_NESW = conAlturaExtra(crearTextura(require('../assets/tiles/recto-nesw.png'), 226, 168));
+const TEXTURA_RIO_RECTO_NWSE = conAlturaExtra(crearTextura(require('../assets/tiles/recto-nwse.png'), 226, 168));
+const TEXTURA_RIO_ESQUINA = conAlturaExtra(crearTextura(require('../assets/tiles/esquina.png'), 226, 166));
+const TEXTURA_RIO_CONFLUENCIA = conAlturaExtra(crearTextura(require('../assets/tiles/confluencia-4.png'), 226, 168));
+const TEXTURA_RIO_ANCHO = conAlturaExtra(crearTextura(require('../assets/tiles/ancho.png'), 226, 167));
 
-// fin.png no comparte el canvas de sus hermanas (226px de ancho real) — mide
-// 238px de ancho. El contenido dibujado (el pool de agua en sí) ocupa el
-// mismo tamaño en píxeles crudos que en recto/esquina/ancho/confluencia
-// (~210x151, verificado recortando por canal alfa), solo que centrado en un
-// canvas más grande. crearTextura fuerza el ancho renderizado a ANCHO_TILE
-// SIEMPRE, así que tratar a fin.png igual que a sus hermanas la escala con
-// un factor distinto (72/238 en vez de 72/226) y el agua sale más chica y
-// desalineada respecto a las piezas vecinas con las que tiene que calzar.
-// Se usa acá la MISMA escala que las hermanas (basada en su ancho real,
-// 226) en vez de forzar ANCHO_TILE, para que el contenido quede del mismo
-// tamaño en pantalla — el ancho final renderizado da ~75px, no 72, y es
-// intencional.
 const ESCALA_RIO = ANCHO_TILE / 226;
-const TEXTURA_RIO_FIN: Textura = {
+const TEXTURA_RIO_FIN: Textura = conAlturaExtra({
   fuente: require('../assets/tiles/fin.png'),
   ancho: 238 * ESCALA_RIO,
   alto: 206 * ESCALA_RIO,
-};
+});
 
 // Orientación asumida de cada pieza tal como está dibujada — lectura visual
 // aproximada. Si alguna pieza sale rotada/espejada al revés en el
@@ -346,15 +334,18 @@ const ESQUINA_BASE_VERTICE: Vertice = 'ABAJO';
 // Aplica un espejado "en el lugar" (preserva el anclaje por borde superior)
 // — si no hace falta espejar, no agrega transform.
 function piezaPlano(base: Textura, escalaX: 1 | -1 = 1, escalaY: 1 | -1 = 1): Textura {
-  if (escalaX === 1 && escalaY === 1) return { fuente: base.fuente, alto: base.alto, ancho: base.ancho };
+  const baseTransform = base.transform ?? '';
+  if (escalaX === 1 && escalaY === 1) return { fuente: base.fuente, alto: base.alto, ancho: base.ancho, transform: baseTransform };
   const centroY = -ALTO_TILE / 2 + base.alto / 2;
+  const flip = `translate(0,${centroY}) scale(${escalaX},${escalaY}) translate(0,${-centroY})`;
   return {
     fuente: base.fuente,
     alto: base.alto,
     ancho: base.ancho,
-    transform: `translate(0,${centroY}) scale(${escalaX},${escalaY}) translate(0,${-centroY})`,
+    transform: baseTransform ? `${baseTransform} ${flip}` : flip,
   };
 }
+
 
 // Rotación de 90°/-90° + escala compensatoria para que la huella final
 // siga midiendo ANCHO_TILE x alto — aproximación aceptada (distorsiona la
@@ -449,7 +440,7 @@ function texturaParaTile(
       if (tile.recurso === 'madera' && !recolectado) return TEXTURA_ARBOL_SECO;
       return TEXTURA_ARENA;
     case 'rio':
-      return null; // El río se renderiza como cauce continuo suave en SVG sin bloques 3D de tierra elevados
+      return texturaRio(tile, tilesPorClave);
     case 'oasis':
       return TEXTURA_OASIS;
     case 'montana':
@@ -2370,9 +2361,10 @@ export default function PantallaJuego({ session }: { session: Session }) {
                     points={ROMBO_BASE_POINTS}
                     transform={`translate(${pixel.x},${pixel.y})`}
                     fill={relleno}
-                    stroke={sinCamino ? '#E8746A' : tile.tipo === 'rio' ? 'none' : '#2C394D'}
-                    strokeWidth={sinCamino ? 2.5 : tile.tipo === 'rio' ? 0 : 1}
+                    stroke={sinCamino ? '#E8746A' : '#2C394D'}
+                    strokeWidth={sinCamino ? 2.5 : 1}
                   />
+
 
                   {textura && (
                     <G transform={`translate(${pixel.x},${pixel.y}) ${textura.transform ?? ''}`}>
@@ -2414,54 +2406,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
             })}
 
-            {/* Cauce profundo del río (borde y orilla) */}
-            {juntasRioVisibles.map((j) => (
-              <Circle
-                key={`rio-borde-j-${claveCoord(j.tile)}`}
-                cx={j.pixel.x}
-                cy={j.pixel.y}
-                r={(j.ancho + RIO_BORDE_EXTRA) / 2}
-                fill={COLOR_RIO_BORDE}
-              />
-            ))}
-            {tramosRioVisibles.map((t) => (
-              <Polygon
-                key={`rio-borde-t-${[claveCoord(t.a.tile), claveCoord(t.b.tile)].sort().join('_')}`}
-                points={franjaAgua(t.a.pixel, t.b.pixel, t.ancho + RIO_BORDE_EXTRA)}
-                fill={COLOR_RIO_BORDE}
-              />
-            ))}
 
-            {/* Masa de agua viva y turquesa */}
-            {juntasRioVisibles.map((j) => (
-              <Circle
-                key={`rio-agua-j-${claveCoord(j.tile)}`}
-                cx={j.pixel.x}
-                cy={j.pixel.y}
-                r={j.ancho / 2}
-                fill={COLOR_RIO_AGUA}
-              />
-            ))}
-            {tramosRioVisibles.map((t) => (
-              <Polygon
-                key={`rio-agua-t-${[claveCoord(t.a.tile), claveCoord(t.b.tile)].sort().join('_')}`}
-                points={franjaAgua(t.a.pixel, t.b.pixel, t.ancho)}
-                fill={COLOR_RIO_AGUA}
-              />
-            ))}
-
-            {/* Corrientes y ondas de flujo de agua en movimiento */}
-            {tramosRioVisibles.map((t) => (
-              <Path
-                key={`rio-onda-t-${[claveCoord(t.a.tile), claveCoord(t.b.tile)].sort().join('_')}`}
-                d={lineaOndaAgua(t.a.pixel, t.b.pixel)}
-                stroke="rgba(255, 255, 255, 0.45)"
-                strokeWidth={2}
-                strokeDasharray="14 10"
-                strokeLinecap="round"
-                fill="none"
-              />
-            ))}
 
 
             {geometria.puntos

@@ -2459,38 +2459,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
                 );
               })}
 
-            {cuerdasConstruidas.map((cuerda) => {
-              const pMontana = isoAPixel(cuerda.montana, ANCHO_TILE, ALTO_TILE);
-              const pSuelo = isoAPixel(cuerda.suelo, ANCHO_TILE, ALTO_TILE);
-              const claveCuerda = `${claveCoord(cuerda.suelo)}_${claveCoord(cuerda.montana)}`;
-              const x1 = pMontana.x;
-              const y1 = pMontana.y - 22;
-              const x2 = pSuelo.x;
-              const y2 = pSuelo.y;
-              const cx = (x1 + x2) / 2;
-              const cy = (y1 + y2) / 2 - 4;
 
-              return (
-                <Fragment key={`linea-cuerda-${claveCuerda}`}>
-                  <Path
-                    d={`M ${x1} ${y1 + 2} Q ${cx} ${cy + 2} ${x2} ${y2 + 2}`}
-                    stroke="rgba(0, 0, 0, 0.4)"
-                    strokeWidth={4}
-                    strokeLinecap="round"
-                    fill="none"
-                  />
-                  <Path
-                    d={`M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`}
-                    stroke="#D4A359"
-                    strokeWidth={3}
-                    strokeDasharray="5 2"
-                    strokeLinecap="round"
-                    fill="none"
-                  />
-                  <Circle cx={x2} cy={y2} r={3.5} fill="#D4A359" stroke="#5C4018" strokeWidth={1} />
-                </Fragment>
-              );
-            })}
 
             {(() => {
               const pixelJugador = isoAPixel(posicionVisual, ANCHO_TILE, ALTO_TILE);

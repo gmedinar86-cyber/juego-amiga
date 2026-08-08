@@ -1,7 +1,14 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Image as RNImage, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Svg, { Circle, Ellipse, G, Image as ImagenSvg, Path, Polygon, Polyline, Text as TextoSvg } from 'react-native-svg';
+
+function resolverFuenteImagen(fuente: any): any {
+  if (!fuente) return undefined;
+  if (typeof fuente === 'string') return fuente;
+  const resolved = RNImage.resolveAssetSource(fuente);
+  return resolved ? resolved.uri : fuente;
+}
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import {
@@ -88,8 +95,8 @@ interface Textura {
   centrado?: boolean;
 }
 
-function crearTextura(fuente: number, anchoOriginal: number, altoOriginal: number): Textura {
-  return { fuente, alto: ANCHO_TILE / (anchoOriginal / altoOriginal) };
+function crearTextura(fuente: any, anchoOriginal: number, altoOriginal: number): Textura {
+  return { fuente: resolverFuenteImagen(fuente), alto: ANCHO_TILE / (anchoOriginal / altoOriginal) };
 }
 
 const TEXTURA_ARENA = crearTextura(require('../assets/tiles/sand.png'), 263, 199);
@@ -2687,7 +2694,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
               return (
                 <ImagenSvg
-                  href={SPRITE_JUGADOR}
+                  href={resolverFuenteImagen(SPRITE_JUGADOR)}
                   x={pixelJugador.x - SPRITE_ANCHO / 2}
                   y={pixelJugador.y - SPRITE_ALTO}
                   width={SPRITE_ANCHO}

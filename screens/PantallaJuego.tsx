@@ -74,7 +74,7 @@ const SEMI_ALTO_BASE = CAMARA_RADIO * ALTO_TILE;
 const ZOOM_MIN_ABSOLUTO = 0.05;
 const ZOOM_MAX = 2.5;
 const MARGEN_ZOOM_ALEJADO = 1.15;
-const ROMBO_BASE_POINTS = esquinasRombo(0, 0, ANCHO_TILE - 3, ALTO_TILE - 3);
+const ROMBO_BASE_POINTS = esquinasRombo(0, 0, ANCHO_TILE + 0.5, ALTO_TILE + 0.5);
 
 
 // Placeholder visual: sprite frontal (no isométrico), solo para tener idea
@@ -113,6 +113,12 @@ function crearTextura(fuente: any, anchoOriginal: number, altoOriginal: number):
   return { fuente, alto: ANCHO_TILE / (anchoOriginal / altoOriginal) };
 }
 
+function crearTexturaEscalada(fuente: any, anchoOriginal: number, altoOriginal: number, factorEscala: number): Textura {
+  const anchoVisual = ANCHO_TILE * factorEscala;
+  const altoVisual = anchoVisual * (altoOriginal / anchoOriginal);
+  return { fuente, ancho: anchoVisual, alto: altoVisual };
+}
+
 const TEXTURA_ARENA = crearTextura(require('../assets/tiles/sand.png'), 263, 199);
 
 // Texturas más altas que TEXTURA_ARENA (montaña, árbol, cactus, oasis) son
@@ -138,7 +144,9 @@ const TEXTURA_OASIS = conAlturaExtra(crearTextura(require('../assets/tiles/oasis
 // que roca-cambio-rol/cactus-v2/las variantes con cuerda — sin base de arena
 // compartida), así que va con conBaseEnVertice, no conAlturaExtra.
 const TEXTURA_MONTANA = conBaseEnVertice(crearTextura(require('../assets/entorno/mountain-v2.png'), 597, 549));
-const TEXTURA_ARBOL_SECO = conAlturaExtra(crearTextura(require('../assets/tiles/dead-tree.png'), 263, 278));
+const TEXTURA_ARBOL_SECO = conBaseEnVertice(
+  crearTexturaEscalada(require('../assets/entorno/arbol limpio.png'), 1024, 1536, 0.70)
+);
 // cactus.png: OJO, hay que pasarle las dimensiones REALES del archivo acá
 // (263x312) — el ancho/alto que ve <Image preserveAspectRatio="xMidYMid
 // meet"> depende de las dimensiones intrínsecas reales del PNG, no de lo
@@ -164,10 +172,8 @@ function conMargenAbajoCorregido(base: Textura, anchoOriginal: number, margenAba
   return extra > 0 ? { ...base, transform: `translate(0,${-extra})` } : base;
 }
 
-const TEXTURA_CACTUS = conMargenAbajoCorregido(
-  crearTextura(require('../assets/tiles/cactus.png'), 263, 312),
-  263,
-  73 - 11
+const TEXTURA_CACTUS = conBaseEnVertice(
+  crearTexturaEscalada(require('../assets/entorno/cactus limpio.png'), 1024, 1536, 0.70)
 );
 
 // roca-cambio-rol.png es en realidad la textura del PORTAL (monolito de
@@ -205,23 +211,21 @@ function conBaseEnVerticeConMargen(base: Textura, anchoOriginal: number, margenA
 // ~19px de margen transparente real por debajo de esa base (recorte de
 // export), que hay que descontar para que quede apoyada en el tile y no
 // flotando sobre él.
-const TEXTURA_CACTUS_PELIGROSO = conBaseEnVerticeConMargen(
-  crearTextura(require('../assets/entorno/cactus-v2.png'), 453, 732),
-  453,
-  19
+const TEXTURA_CACTUS_PELIGROSO = conBaseEnVertice(
+  crearTexturaEscalada(require('../assets/entorno/cactus limpio.png'), 1024, 1536, 0.70)
 );
 
 // Recursos con arte real (reemplazan los íconos placeholder de piedra/lana
 // y el cofre): mismo estilo de bloque sobre base de arena que sand/mountain,
 // así que van con conAlturaExtra como esas.
 const TEXTURA_ROCA_MINERAL = conAlturaExtra(crearTextura(require('../assets/entorno/mining-rock.png'), 249, 232));
-const TEXTURA_COFRE_CAJA = conAlturaExtra(crearTextura(require('../assets/entorno/chest.png'), 248, 231));
+const TEXTURA_COFRE_CAJA = conBaseEnVertice(
+  crearTextura(require('../assets/entorno/cofre limpio.png'), 1024, 1024)
+);
 // sheep.png tiene el mismo problema de margen que cactus.png (43px abajo
 // contra ~12px en los otros 3 bordes) — mismo fix.
-const TEXTURA_OVEJA = conMargenAbajoCorregido(
-  crearTextura(require('../assets/entorno/sheep.png'), 250, 261),
-  250,
-  43 - 12
+const TEXTURA_OVEJA = conBaseEnVertice(
+  crearTextura(require('../assets/entorno/oveja limpia.png'), 1024, 1024)
 );
 
 // Punto "montaña" de una cuerda ya colocada: mismo modelo de roca que
@@ -627,7 +631,7 @@ function IconoHerramientaAccion({ tipo }: { tipo: 'talar' | 'picar' | 'esquilar'
 // DEBUG: muestra el bioma completo sin niebla, solo para esta fase de pruebas.
 // Solo afecta qué color se pinta — no toca `descubiertas` ni lo persistido en
 // descubrimiento_jugador. Volver a `false` cuando dejemos de necesitarlo.
-const DEBUG_SIN_FOG = false;
+const DEBUG_SIN_FOG = true;
 
 interface LimitesBioma {
   minX: number;
@@ -673,7 +677,7 @@ function colorTile(tipo: string): string {
       // texturaParaTile) que no cubre todo el rombo (es una roca "suelta",
       // no un bloque como sand/montaña) — el fondo visible alrededor debe
       // ser arena, no un color de relleno.
-      return '#B98A4A';
+      return '#E2BE7D';
   }
 }
 
@@ -2620,12 +2624,12 @@ export default function PantallaJuego({ session }: { session: Session }) {
                     points={ROMBO_BASE_POINTS}
                     transform={`translate(${pixel.x},${pixel.y})`}
                     fill={relleno}
-                    stroke={sinCamino ? '#E8746A' : '#2C394D'}
-                    strokeWidth={sinCamino ? 2.5 : 1}
+                    stroke={sinCamino ? '#E8746A' : 'none'}
+                    strokeWidth={sinCamino ? 2.5 : 0}
                   />
 
 
-                  {textura && (() => {
+                  {textura && textura !== TEXTURA_ARENA && (() => {
                     const animActiva = animacionesAccion.find(
                       (a) => a.tileX === tile.x && a.tileY === tile.y && Date.now() - a.inicioMs < a.duracionMs
                     );

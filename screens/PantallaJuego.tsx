@@ -228,6 +228,10 @@ const TEXTURA_OVEJA = conBaseEnVertice(
   crearTextura(require('../assets/entorno/oveja limpia.png'), 1024, 1024)
 );
 
+const TEXTURA_ROCA_CLASE = conBaseEnVertice(
+  crearTexturaEscalada(require('../assets/entorno/piedra arquero.png'), 1024, 1536, 0.75)
+);
+
 // Punto "montaña" de una cuerda ya colocada: mismo modelo de roca que
 // TEXTURA_MONTANA pero con la soga tallada, para que se note a simple vista
 // dónde se puede subir/bajar sin agregar un ícono aparte.
@@ -500,9 +504,7 @@ function texturaParaTile(
       // piedra/lana cuando se juntan (ver el filtro de íconos más abajo).
       return recolectado ? TEXTURA_ARENA : TEXTURA_ARBOL_SECO;
     case 'roca_clase':
-      // Landmark de cambio de rol, separado del portal — todavía sin arte
-      // propia (ver comentario en TEXTURA_PORTAL), sigue con colorTile.
-      return null;
+      return TEXTURA_ROCA_CLASE;
     case 'portal':
       return TEXTURA_PORTAL;
     case 'cactus':
@@ -691,7 +693,7 @@ function colorTile(tipo: string): string {
     // plano distintivo (violeta) para que se distinga de la arena mientras
     // tanto. La interacción real de cambio de clase se construye aparte.
     case 'roca_clase':
-      return '#8B5CF6';
+      return '#E2BE7D';
     default:
       // 'portal' cae acá a propósito: tiene textura propia (el monolito, ver
       // texturaParaTile) que no cubre todo el rombo (es una roca "suelta",

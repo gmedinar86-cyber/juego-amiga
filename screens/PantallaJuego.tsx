@@ -426,24 +426,15 @@ function texturaRio(tile: TileBioma, tilesPorClave: Map<string, TileBioma>): Tex
     return tilesPorClave.get(claveCoord({ x: tile.x + d.x, y: tile.y + d.y }))?.tipo === 'rio';
   });
 
-  if (conectados.length === 0) return orientarFin(FIN_BASE); // aislado: no hay vecino que oriente la pieza
-  if (conectados.length === 1) return orientarFin(conectados[0]);
-
   if (conectados.length === 2) {
     const [a, b] = conectados;
     if (sonOpuestos(a, b)) {
       const ejeY = a === 'NE' || a === 'SW';
-      return piezaPlano(ejeY ? TEXTURA_RIO_RECTO_NESW : TEXTURA_RIO_RECTO_NWSE);
+      return ejeY ? TEXTURA_RIO_RECTO_NESW : TEXTURA_RIO_RECTO_NWSE;
     }
-    return orientarEsquina(verticeDesdeBordes(a, b));
   }
 
-  if (conectados.length === 3) {
-    const faltante = (Object.keys(BORDE_DELTA) as Borde[]).find((b) => !conectados.includes(b))!;
-    return orientarAncho(faltante);
-  }
-
-  return piezaPlano(TEXTURA_RIO_CONFLUENCIA);
+  return TEXTURA_RIO_RECTO_NESW;
 }
 
 function texturaParaTile(

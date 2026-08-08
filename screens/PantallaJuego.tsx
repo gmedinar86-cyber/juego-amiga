@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Svg, { Circle, G, Image as ImagenSvg, Path, Polygon, Polyline, Text as TextoSvg } from 'react-native-svg';
 import type { Session } from '@supabase/supabase-js';
@@ -2122,36 +2122,65 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
   return (
     <View style={styles.contenedor}>
-      <View style={styles.encabezado}>
-        <View>
-          <Text style={styles.titulo}>{bioma.nombre}</Text>
-          <Text style={styles.subtitulo}>
-            Nivel {progreso.nivel} · Fuerza {progreso.fuerza}
-          </Text>
-          <Text style={styles.subtitulo}>
-            Vida: {progreso.vida_actual}/{VIDA_MAXIMA}
-          </Text>
-        </View>
-        <View style={styles.accionesEncabezado}>
-          <TouchableOpacity onPress={() => setInventarioVisible(true)}>
-            <Text style={styles.enlace}>Inventario ({inventario.length})</Text>
-          </TouchableOpacity>
-          {tieneBancoDeTrabajo && (
-            <TouchableOpacity onPress={() => setCrafteoVisible(true)}>
-              <Text style={styles.enlace}>Crear</Text>
+      {modalCuerdaVisible ? (
+        <View style={styles.selectorCuerdaBarra}>
+          <View style={styles.selectorCuerdaInfo}>
+            <Text style={styles.selectorCuerdaTitulo}>
+              {tileActual?.tipo === 'montana' ? '¿Por dónde bajar?' : '¿En qué montaña?'}
+            </Text>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.selectorCuerdaOpciones}>
+            {opcionesCuerda.map((opcion, index) => {
+              const objetivo = tileActual?.tipo === 'montana' ? opcion.suelo : opcion.montana;
+              const dirNombre = tileActual ? nombreDireccion(tileActual, objetivo) : `Opción ${index + 1}`;
+              return (
+                <TouchableOpacity
+                  key={`opcion-cuerda-${claveCoord(opcion.suelo)}_${claveCoord(opcion.montana)}`}
+                  style={styles.botonOpcionDireccion}
+                  onPress={() => confirmarColocarCuerda(opcion)}
+                >
+                  <Text style={styles.botonOpcionTexto}>{dirNombre}</Text>
+                </TouchableOpacity>
+              );
+            })}
+            <TouchableOpacity style={styles.botonCancelarHeader} onPress={() => setModalCuerdaVisible(false)}>
+              <Text style={styles.botonCancelarHeaderTexto}>Cancelar</Text>
             </TouchableOpacity>
-          )}
-          <TouchableOpacity onPress={() => setResetVisible(true)}>
-            <Text style={styles.enlace}>Reiniciar nivel</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => setAyudaVisible(true)}>
-            <Text style={styles.enlace}>Ayuda</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => supabase.auth.signOut()}>
-            <Text style={styles.enlace}>Cerrar sesión</Text>
-          </TouchableOpacity>
+          </ScrollView>
         </View>
-      </View>
+      ) : (
+        <View style={styles.encabezado}>
+          <View>
+            <Text style={styles.titulo}>{bioma.nombre}</Text>
+            <Text style={styles.subtitulo}>
+              Nivel {progreso.nivel} · Fuerza {progreso.fuerza}
+            </Text>
+            <Text style={styles.subtitulo}>
+              Vida: {progreso.vida_actual}/{VIDA_MAXIMA}
+            </Text>
+          </View>
+          <View style={styles.accionesEncabezado}>
+            <TouchableOpacity onPress={() => setInventarioVisible(true)}>
+              <Text style={styles.enlace}>Inventario ({inventario.length})</Text>
+            </TouchableOpacity>
+            {tieneBancoDeTrabajo && (
+              <TouchableOpacity onPress={() => setCrafteoVisible(true)}>
+                <Text style={styles.enlace}>Crear</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity onPress={() => setResetVisible(true)}>
+              <Text style={styles.enlace}>Reiniciar nivel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setAyudaVisible(true)}>
+              <Text style={styles.enlace}>Ayuda</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => supabase.auth.signOut()}>
+              <Text style={styles.enlace}>Cerrar sesión</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
 
       {mensajeAccion && (
         <View style={styles.mensajeAccion}>
@@ -2280,37 +2309,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
         </View>
       </Modal>
 
-      <Modal visible={modalCuerdaVisible} transparent animationType="fade" onRequestClose={() => setModalCuerdaVisible(false)}>
-        <View style={styles.modalFondoDerecha}>
-          <View style={styles.modalContenidoDerecha}>
-            <Text style={styles.modalTitulo}>
-              {tileActual?.tipo === 'montana' ? '¿Por qué lado querés bajar?' : '¿En qué montaña querés colocar la cuerda?'}
-            </Text>
-            <Text style={styles.modalVacio}>
-              {tileActual?.tipo === 'montana'
-                ? 'Elegí la casilla de arena a la que va a caer la cuerda:'
-                : 'Elegí hacia qué montaña colindante querés fijar la cuerda:'}
-            </Text>
-            {opcionesCuerda.map((opcion, index) => {
-              const objetivo = tileActual?.tipo === 'montana' ? opcion.suelo : opcion.montana;
-              const dirNombre = tileActual ? nombreDireccion(tileActual, objetivo) : `Opción ${index + 1}`;
-              return (
-                <TouchableOpacity
-                  key={`opcion-cuerda-${claveCoord(opcion.suelo)}_${claveCoord(opcion.montana)}`}
-                  style={[styles.boton, { marginBottom: 8 }]}
-                  onPress={() => confirmarColocarCuerda(opcion)}
-                >
-                  <Text style={styles.botonTexto}>{dirNombre}</Text>
-                </TouchableOpacity>
-              );
-            })}
-            <TouchableOpacity style={styles.botonCancelar} onPress={() => setModalCuerdaVisible(false)}>
-              <Text style={styles.botonCancelarTexto}>Cancelar</Text>
-            </TouchableOpacity>
 
-          </View>
-        </View>
-      </Modal>
 
 
 
@@ -2863,6 +2862,59 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 14,
   },
+  selectorCuerdaBarra: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#1D2A38',
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#F4B93F',
+    minHeight: 52,
+  },
+  selectorCuerdaInfo: {
+    marginRight: 8,
+  },
+  selectorCuerdaTitulo: {
+    color: '#F4B93F',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  selectorCuerdaOpciones: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  botonOpcionDireccion: {
+    backgroundColor: '#2C394D',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#F4B93F',
+  },
+  botonOpcionTexto: {
+    color: '#F6EFD8',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  botonCancelarHeader: {
+    backgroundColor: '#3A282D',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E8746A',
+    marginLeft: 4,
+  },
+  botonCancelarHeaderTexto: {
+    color: '#E8746A',
+    fontWeight: '700',
+    fontSize: 13,
+  },
   modalFondoDerecha: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.25)',
@@ -2896,5 +2948,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
 });
+
 
 

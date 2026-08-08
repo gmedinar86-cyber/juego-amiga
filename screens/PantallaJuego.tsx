@@ -1299,10 +1299,13 @@ function completarPaso(destinoPaso: Coord) {
   }
 
   function ejecutarSiguientePaso() {
-    const destino = colaRef.current[0];
-    if (!destino) return;
+  const destino = colaRef.current[0];
+  if (!destino) return;
+  // Pequeña pausa para que el renderizado se complete entre pasos
+  setTimeout(() => {
     animarPaso(destino, () => completarPaso(destino));
-  }
+  }, 5);
+}
 
   // Punto de entrada del tap sobre una casilla descubierta: calcula el
   // camino con BFS y lo agenda. Si ya hay un camino en curso, el tap actúa

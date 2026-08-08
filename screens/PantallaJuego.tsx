@@ -212,7 +212,12 @@ const TEXTURA_MONTANA_CUERDA_2 = conBaseEnVertice(
   crearTextura(require('../assets/entorno/mountain-rope-2.png'), 341, 326)
 );
 
-const TEXTURA_PUENTE = conAlturaExtra(crearTextura(require('../assets/entorno/puente-madera.png'), 600, 466));
+const TEXTURA_PUENTE_NORMAL = conAlturaExtra(crearTextura(require('../assets/entorno/puente-madera.png'), 600, 466));
+const TEXTURA_PUENTE_VOLTEADO = {
+  ...TEXTURA_PUENTE_NORMAL,
+  transform: 'scale(-1, 1)',
+};
+
 
 // Mapa fijo diseñado a mano: todas las 'montana' usan la misma textura, sin
 // variedad aleatoria (la mezcla con dead-tree/cactus era del generador
@@ -645,6 +650,19 @@ function buscarVecinoRioSinPuente(
 function esRioDeUnaCasilla(tile: TileBioma, tilesPorClave: Map<string, TileBioma>): boolean {
   const vecinosRio = vecinos(tile).filter((v) => tilesPorClave.get(claveCoord(v))?.tipo === 'rio').length;
   return vecinosRio <= 2;
+}
+
+function texturaPuenteOrientado(tile: TileBioma, tilesPorClave: Map<string, TileBioma>): Textura {
+  const tNW = tilesPorClave.get(claveCoord({ x: tile.x - 1, y: tile.y }));
+  const tSE = tilesPorClave.get(claveCoord({ x: tile.x + 1, y: tile.y }));
+
+  const rioNW = tNW?.tipo === 'rio';
+  const rioSE = tSE?.tipo === 'rio';
+
+  if (rioNW || rioSE) {
+    return TEXTURA_PUENTE_VOLTEADO;
+  }
+  return TEXTURA_PUENTE_NORMAL;
 }
 
 // Igual que buscarVecinoRioSinPuente, pero solo devuelve un candidato válido
@@ -1985,8 +2003,9 @@ export default function PantallaJuego({ session }: { session: Session }) {
       const cuerdaEnEsteMontana =
         tile.tipo === 'montana' ? cuerdasConstruidas.find((c) => coordsIguales(c.montana, tile)) : undefined;
       const tex = esPuenteTile
-        ? TEXTURA_PUENTE
+        ? texturaPuenteOrientado(tile, tilesPorClave)
         : texturaParaTile(
+
             tile,
             tilesPorClave,
             recursosRecolectados.has(clave),
@@ -2302,7 +2321,12 @@ export default function PantallaJuego({ session }: { session: Session }) {
               const sinCamino = casillaSinCamino === clave;
               const esPuenteTile = tile.tipo === 'rio' && puentesConstruidos.has(clave);
               const relleno = revelada ? (esPuenteTile ? COLOR_PUENTE : colorTile(tile.tipo)) : '#1B2536';
-              const textura = revelada ? (esPuenteTile ? TEXTURA_PUENTE : (mapaTexturas.get(clave) ?? null)) : null;
+              const textura = revelada
+                ? esPuenteTile
+                  ? texturaPuenteOrientado(tile, tilesPorClave)
+                  : (mapaTexturas.get(clave) ?? null)
+                : null;
+
               const esSueloCuerda = revelada && cuerdasConstruidas.some((c) => coordsIguales(c.suelo, tile));
               const opcionCuerdaPar =
                 revelada && modalCuerdaVisible && tileActual

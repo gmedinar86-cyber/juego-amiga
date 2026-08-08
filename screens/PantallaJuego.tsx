@@ -211,6 +211,15 @@ const TEXTURA_MONTANA_CUERDA_1 = conBaseEnVertice(
 const TEXTURA_MONTANA_CUERDA_2 = conBaseEnVertice(
   crearTextura(require('../assets/entorno/mountain-rope-2.png'), 341, 326)
 );
+const TEXTURA_MONTANA_CUERDA_TOP = conBaseEnVertice(
+  crearTextura(require('../assets/entorno/mountain-rope-top.png'), 341, 326)
+);
+
+function esCuerdaTrasera(cuerda: CuerdaConstruida): boolean {
+  const dx = cuerda.suelo.x - cuerda.montana.x;
+  const dy = cuerda.suelo.y - cuerda.montana.y;
+  return dx + dy < 0;
+}
 
 const TEXTURA_PUENTE_NORMAL = conAlturaExtra(crearTextura(require('../assets/entorno/puente-madera.png'), 600, 466));
 const TEXTURA_PUENTE_VOLTEADO = {
@@ -227,6 +236,9 @@ const TEXTURA_PUENTE_VOLTEADO = {
 // pantalla) — rope-1 sale por la izquierda, rope-2 por la derecha.
 function texturaMontana(tile: TileBioma, cuerda?: CuerdaConstruida): Textura {
   if (cuerda) {
+    if (esCuerdaTrasera(cuerda)) {
+      return TEXTURA_MONTANA_CUERDA_TOP;
+    }
     const dx = cuerda.suelo.x - tile.x;
     const dy = cuerda.suelo.y - tile.y;
     const screenXDiff = dx - dy;

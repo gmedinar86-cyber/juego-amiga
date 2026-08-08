@@ -565,6 +565,40 @@ function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
 }
 
+function IconoHerramientaAccion({ tipo }: { tipo: 'talar' | 'picar' | 'esquilar' | 'abrir_cofre' }) {
+  if (tipo === 'abrir_cofre') return null;
+  if (tipo === 'talar') {
+    // Hacha (Mango de madera marrón + Cabeza metálica de hacha)
+    return (
+      <G>
+        <Path d="M-2,12 L2,-12" stroke="#78350F" strokeWidth={3.5} strokeLinecap="round" />
+        <Path d="M1,-6 L10,-12 Q14,-4 8,2 L0,-4 Z" fill="#94A3B8" stroke="#475569" strokeWidth={1} />
+      </G>
+    );
+  }
+  if (tipo === 'picar') {
+    // Pico (Mango de madera + Doble pico metálico curvo)
+    return (
+      <G>
+        <Path d="M-2,12 L2,-12" stroke="#78350F" strokeWidth={3.5} strokeLinecap="round" />
+        <Path d="M-12,-10 Q0,-4 12,-10 Q0,-14 -12,-10 Z" fill="#94A3B8" stroke="#475569" strokeWidth={1} />
+      </G>
+    );
+  }
+  if (tipo === 'esquilar') {
+    // Tijeras (Hojas metálicas cruzadas con mangos rojos)
+    return (
+      <G>
+        <Path d="M-8,-10 L8,8" stroke="#94A3B8" strokeWidth={3} strokeLinecap="round" />
+        <Path d="M8,-10 L-8,8" stroke="#94A3B8" strokeWidth={3} strokeLinecap="round" />
+        <Circle cx={-8} cy={10} r={3.5} fill="none" stroke="#EF4444" strokeWidth={2} />
+        <Circle cx={8} cy={10} r={3.5} fill="none" stroke="#EF4444" strokeWidth={2} />
+      </G>
+    );
+  }
+  return null;
+}
+
 // DEBUG: muestra el bioma completo sin niebla, solo para esta fase de pruebas.
 // Solo afecta qué color se pinta — no toca `descubiertas` ni lo persistido en
 // descubrimiento_jugador. Volver a `false` cuando dejemos de necesitarlo.
@@ -828,6 +862,51 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const [zoom, setZoom] = useState(1);
   const [tamanoContenedor, setTamanoContenedor] = useState({ width: 0, height: 0 });
 
+  // Estado de animaciones de UI, recolección y caída de recursos
+  const [notificacionesFlotantes, setNotificacionesFlotantes] = useState<
+    { id: string; texto: string; color: string; x: number; y: number; inicioMs: number }[]
+  >([]);
+  const [animacionesAccion, setAnimacionesAccion] = useState<
+    {
+      id: string;
+      tipo: 'talar' | 'picar' | 'esquilar' | 'abrir_cofre';
+      tileX: number;
+      tileY: number;
+      pixelOrigen: Coord;
+      pixelDestino: Coord;
+      inicioMs: number;
+      duracionMs: number;
+    }[]
+  >([]);
+  const [frameAnim, setFrameAnim] = useState(0);
+
+  useEffect(() => {
+    let animId: number;
+    let tick = 0;
+    const updateLoop = () => {
+      tick++;
+      setFrameAnim(tick);
+      animId = requestAnimationFrame(updateLoop);
+    };
+    animId = requestAnimationFrame(updateLoop);
+    return () => cancelAnimationFrame(animId);
+  }, []);
+
+  function agregarNotificacionFlotante(texto: string, color: string = '#F4B93F') {
+    if (!progreso) return;
+    const posPixel = isoAPixel({ x: progreso.posicion_q, y: progreso.posicion_r }, ANCHO_TILE, ALTO_TILE);
+    const nueva = {
+      id: Math.random().toString(36).substring(2, 9),
+      texto,
+      color,
+      x: posPixel.x,
+      y: posPixel.y - 30,
+      inicioMs: Date.now(),
+    };
+    setNotificacionesFlotantes((prev) => [...prev.filter((n) => Date.now() - n.inicioMs < 1200), nueva]);
+  }
+
+
 
 
 
@@ -837,6 +916,10 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const cameraOffsetRef = useRef(cameraOffset);
   const zoomRef = useRef(zoom);
   const progresoRef = useRef(progreso);
+  const recursosRecolectadosRef = useRef(recursosRecolectados);
+  recursosRecolectadosRef.current = recursosRecolectados;
+  const cofresAbiertosRef = useRef(cofresAbiertos);
+  cofresAbiertosRef.current = cofresAbiertos;
   const limitesRef = useRef<LimitesBioma | null>(null);
   const zoomMinRef = useRef(ZOOM_MIN_ABSOLUTO);
   const tamanoRef = useRef(tamanoContenedor);
@@ -1104,18 +1187,25 @@ export default function PantallaJuego({ session }: { session: Session }) {
         .eq('usuario_id', session.user.id);
       if (errInventario) throw errInventario;
 
-      // Todo jugador nuevo arranca con un Hacha en el inventario.
+      // Otorgar Hacha, Pico y Tijeras en el inventario para probar todas las animaciones de acción
       let inventarioFinal = inventarioData ?? [];
-      if (esJugadorNuevo) {
-        const hacha = Array.from(catalogo.values()).find((o) => o.nombre === 'Hacha');
-        if (hacha) {
-          const { data: hachaInicial, error: errHacha } = await supabase
+      const nombresHerramientas = ['Hacha', 'Pico', 'Tijeras'];
+      for (const nombre of nombresHerramientas) {
+        const obj = Array.from(catalogo.values()).find((o) => o.nombre === nombre);
+        if (obj && !inventarioFinal.some((item) => item.objeto_id === obj.id)) {
+          const esDurable = HERRAMIENTAS_CON_DURABILIDAD.has(nombre);
+          const { data: herramientaNueva } = await supabase
             .from('inventario_jugador')
-            .insert({ usuario_id: session.user.id, objeto_id: hacha.id, usos_restantes: USOS_INICIALES_HERRAMIENTA })
+            .insert({
+              usuario_id: session.user.id,
+              objeto_id: obj.id,
+              usos_restantes: esDurable ? 50 : null,
+            })
             .select()
             .single();
-          if (errHacha) throw errHacha;
-          inventarioFinal = [...inventarioFinal, hachaInicial];
+          if (herramientaNueva) {
+            inventarioFinal = [...inventarioFinal, herramientaNueva];
+          }
         }
       }
 
@@ -1295,6 +1385,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
     if (golpeCactusTimeoutRef.current) clearTimeout(golpeCactusTimeoutRef.current);
     golpeCactusTimeoutRef.current = setTimeout(() => setGolpeCactus(false), GOLPE_CACTUS_MS);
     mostrarMensaje(`-${DANO_CACTUS} vida (cactus)`);
+    agregarNotificacionFlotante(`-${DANO_CACTUS} Vida 🌵`, '#EF4444');
 
     const progresoActual = progresoRef.current;
     let vidaLlegoACero = false;
@@ -1459,6 +1550,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
     const objeto = catalogoObjetos.get(objetoId);
     if (objeto && !hayEspacioPara(inventario, catalogoObjetos, objeto.nombre, cantidad)) {
       mostrarMensaje(`Inventario lleno de ${objeto.nombre}`);
+      agregarNotificacionFlotante(`⚠️ Inventario Lleno (${objeto.nombre})`, '#EF4444');
       return;
     }
 
@@ -1478,18 +1570,37 @@ export default function PantallaJuego({ session }: { session: Session }) {
       return;
     }
 
-    const nuevosAbiertos = new Map(cofresAbiertos);
-    nuevosAbiertos.set(clave, { x: progreso.posicion_q, y: progreso.posicion_r });
-    setCofresAbiertos(nuevosAbiertos);
-    setInventario((actual) => [...actual, ...(filasInsertadas ?? [])]);
+    const pixelJugador = isoAPixel({ x: progreso.posicion_q, y: progreso.posicion_r }, ANCHO_TILE, ALTO_TILE);
+    const pixelDestino = isoAPixel(tileActual, ANCHO_TILE, ALTO_TILE);
 
-    mostrarMensaje(`+${cantidad} ${objeto?.nombre ?? 'objeto'}`);
+    // Iniciar la animación de destellos dorados y estrellas del cofre
+    setAnimacionesAccion((prev) => [
+      ...prev.filter((a) => Date.now() - a.inicioMs < a.duracionMs),
+      {
+        id: Math.random().toString(36).substring(2, 9),
+        tipo: 'abrir_cofre',
+        tileX: tileActual.x,
+        tileY: tileActual.y,
+        pixelOrigen: pixelJugador,
+        pixelDestino: pixelDestino,
+        inicioMs: Date.now(),
+        duracionMs: 850,
+      },
+    ]);
 
-    const { error: errDesc } = await supabase
-      .from('descubrimiento_jugador')
-      .update({ cofres_abiertos: Array.from(nuevosAbiertos.values()) })
-      .eq('id', descubrimientoId);
-    if (errDesc) setError(errDesc.message);
+    setTimeout(async () => {
+      const nuevosAbiertos = new Map(cofresAbiertosRef.current);
+      nuevosAbiertos.set(clave, { x: progreso.posicion_q, y: progreso.posicion_r });
+      setCofresAbiertos(nuevosAbiertos);
+      setInventario((actual) => [...actual, ...(filasInsertadas ?? [])]);
+      agregarNotificacionFlotante(`+${cantidad} ${objeto?.nombre ?? 'objeto'}`, '#F4B93F');
+
+      const { error: errDesc } = await supabase
+        .from('descubrimiento_jugador')
+        .update({ cofres_abiertos: Array.from(nuevosAbiertos.values()) })
+        .eq('id', descubrimientoId);
+      if (errDesc) setError(errDesc.message);
+    }, 650);
   }
 
   async function recolectar() {
@@ -1505,6 +1616,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
     if (!hayEspacioPara(inventario, catalogoObjetos, objeto.nombre)) {
       mostrarMensaje(`Inventario lleno de ${objeto.nombre}`);
+      agregarNotificacionFlotante(`⚠️ Inventario Lleno (${objeto.nombre})`, '#EF4444');
       return;
     }
 
@@ -1528,21 +1640,44 @@ export default function PantallaJuego({ session }: { session: Session }) {
       return;
     }
 
-    const nuevos = new Map(recursosRecolectados);
-    nuevos.set(clave, { x: progreso.posicion_q, y: progreso.posicion_r });
-    setRecursosRecolectados(nuevos);
-    setInventario((actual) => [...actual, data]);
-    mostrarMensaje(`+1 ${objeto.nombre}`);
+    const pixelJugador = isoAPixel({ x: progreso.posicion_q, y: progreso.posicion_r }, ANCHO_TILE, ALTO_TILE);
+    const pixelDestino = isoAPixel(tileActual, ANCHO_TILE, ALTO_TILE);
+    const tipoAnim: 'talar' | 'picar' | 'esquilar' =
+      recurso === 'madera' ? 'talar' : recurso === 'piedra' ? 'picar' : 'esquilar';
 
-    const { error: errDesc } = await supabase
-      .from('descubrimiento_jugador')
-      .update({ recursos_recolectados: Array.from(nuevos.values()) })
-      .eq('id', descubrimientoId);
-    if (errDesc) setError(errDesc.message);
+    // 1. Iniciar la animación de la herramienta cortando y saltando astillas/chispas
+    setAnimacionesAccion((prev) => [
+      ...prev.filter((a) => Date.now() - a.inicioMs < a.duracionMs),
+      {
+        id: Math.random().toString(36).substring(2, 9),
+        tipo: tipoAnim,
+        tileX: tileActual.x,
+        tileY: tileActual.y,
+        pixelOrigen: pixelJugador,
+        pixelDestino: pixelDestino,
+        inicioMs: Date.now(),
+        duracionMs: 850,
+      },
+    ]);
 
-    if (instanciaHerramienta) {
-      await descontarUsoHerramienta(instanciaHerramienta, herramienta!.nombre);
-    }
+    // 2. A los 650ms (cuando termina el golpe de la herramienta y se completa el desvanecimiento), retirar el recurso del mapa y otorgar el objeto
+    setTimeout(async () => {
+      const nuevos = new Map(recursosRecolectadosRef.current);
+      nuevos.set(clave, { x: tileActual.x, y: tileActual.y });
+      setRecursosRecolectados(nuevos);
+      setInventario((actual) => [...actual, data]);
+      agregarNotificacionFlotante(`+1 ${objeto.nombre}`, '#38BDF8');
+
+      const { error: errDesc } = await supabase
+        .from('descubrimiento_jugador')
+        .update({ recursos_recolectados: Array.from(nuevos.values()) })
+        .eq('id', descubrimientoId);
+      if (errDesc) setError(errDesc.message);
+
+      if (instanciaHerramienta) {
+        await descontarUsoHerramienta(instanciaHerramienta, herramienta!.nombre);
+      }
+    }, 650);
   }
 
   // Descuenta 1 uso de una instancia de herramienta con durabilidad
@@ -1554,6 +1689,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
     if (usosNuevos <= 0) {
       setInventario((actual) => actual.filter((item) => item.id !== instancia.id));
       mostrarMensaje(`Tu ${nombreHerramienta.toLowerCase()} se rompió y desapareció.`);
+      agregarNotificacionFlotante(`💥 ${nombreHerramienta} se rompió`, '#EF4444');
       const { error: errDelete } = await supabase.from('inventario_jugador').delete().eq('id', instancia.id);
       if (errDelete) setError(errDelete.message);
       return;
@@ -1564,6 +1700,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
     );
     if (usosNuevos === 1) {
       mostrarMensaje(`Tu ${nombreHerramienta.toLowerCase()} está a punto de romperse (1 uso restante)`);
+      agregarNotificacionFlotante(`⚠️ ${nombreHerramienta} (1 uso restante)`, '#F59E0B');
     }
     const { error: errUpdate } = await supabase
       .from('inventario_jugador')
@@ -1574,14 +1711,22 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
   async function craftear(nombreObjeto: string) {
     const receta = RECETAS_CRAFTEO.find((r) => r.nombreObjeto === nombreObjeto);
-    if (!receta || !tieneBancoDeTrabajo) return;
+    if (!receta) return;
+    if (!tieneBancoDeTrabajo) {
+      mostrarMensaje('Necesitas un Banco de Trabajo');
+      agregarNotificacionFlotante('⚠️ Falta Banco de Trabajo', '#EF4444');
+      return;
+    }
     if (!hayEspacioPara(inventario, catalogoObjetos, nombreObjeto)) {
       mostrarMensaje(`Inventario lleno de ${nombreObjeto}`);
+      agregarNotificacionFlotante('⚠️ Inventario lleno', '#EF4444');
       return;
     }
     for (const { nombreMaterial, cantidad } of receta.costo) {
-      if (cantidadDeObjeto(inventario, catalogoObjetos, nombreMaterial) < cantidad) {
+      const posees = cantidadDeObjeto(inventario, catalogoObjetos, nombreMaterial);
+      if (posees < cantidad) {
         mostrarMensaje(`Te falta ${nombreMaterial}`);
+        agregarNotificacionFlotante(`⚠️ Falta ${nombreMaterial} (${posees}/${cantidad})`, '#EF4444');
         return;
       }
     }
@@ -1618,6 +1763,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
     setInventario((actual) => [...actual.filter((item) => !idsABorrar.includes(item.id)), data]);
     mostrarMensaje(`Crafteaste ${nombreObjeto}`);
+    agregarNotificacionFlotante(`✨ Crafteaste ${nombreObjeto}`, '#10B981');
   }
 
   // Valida cada condición por separado y explica con un mensaje cuál falta
@@ -1632,18 +1778,22 @@ export default function PantallaJuego({ session }: { session: Session }) {
       const vecinoCualquiera = buscarVecinoRioSinPuente(origen, tilesPorClave, puentesConstruidos);
       if (!vecinoCualquiera) {
         mostrarMensaje('Necesitas estar junto a un río para construir un puente');
+        agregarNotificacionFlotante('⚠️ Ponte junto a un Río', '#EF4444');
       } else {
         mostrarMensaje('Ese tramo de río es muy ancho — buscá un tramo de 1 sola casilla');
+        agregarNotificacionFlotante('⚠️ Río muy ancho (máx 1 casilla)', '#EF4444');
       }
       return;
     }
     if (!tieneBancoDeTrabajo) {
       mostrarMensaje('Necesitas un banco de trabajo para construir un puente');
+      agregarNotificacionFlotante('⚠️ Falta Banco de Trabajo', '#EF4444');
       return;
     }
     const cantidadMadera = cantidadDeObjeto(inventario, catalogoObjetos, 'Madera');
     if (cantidadMadera < COSTO_PUENTE_MADERA) {
       mostrarMensaje(`Te faltan ${COSTO_PUENTE_MADERA - cantidadMadera} de madera para el puente`);
+      agregarNotificacionFlotante(`⚠️ Falta Madera (${cantidadMadera}/${COSTO_PUENTE_MADERA})`, '#EF4444');
       return;
     }
 
@@ -1665,6 +1815,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
     nuevosPuentes.set(claveCoord(objetivo), objetivo);
     setPuentesConstruidos(nuevosPuentes);
     mostrarMensaje('Puente construido');
+    agregarNotificacionFlotante('🌉 Puente Construido', '#10B981');
 
     const { error: errPuentes } = await supabase
       .from('descubrimiento_jugador')
@@ -1699,6 +1850,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
       vecinos(tileActual).some((v) => tilesPorClave.get(claveCoord(v))?.tipo === 'montana');
     if (!cercaDeMontana) {
       mostrarMensaje('Necesitás estar junto a una montaña para usar la cuerda');
+      agregarNotificacionFlotante('⚠️ Ponte junto a una Montaña', '#EF4444');
       return;
     }
 
@@ -1706,6 +1858,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
     const instancia = cuerdaObjeto ? inventario.find((item) => item.objeto_id === cuerdaObjeto.id) : undefined;
     if (!instancia) {
       mostrarMensaje('Necesitás una Cuerda en el inventario');
+      agregarNotificacionFlotante('⚠️ Falta Cuerda en Inventario', '#EF4444');
       return;
     }
 
@@ -1713,8 +1866,10 @@ export default function PantallaJuego({ session }: { session: Session }) {
     if (opciones.length === 0) {
       if (tileActual.tipo === 'montana') {
         mostrarMensaje('No hay ninguna casilla de arena vacía libre al lado para bajar la cuerda');
+        agregarNotificacionFlotante('⚠️ Sin casilla de arena libre al lado', '#EF4444');
       } else {
         mostrarMensaje('No hay ninguna montaña libre al lado para colocar la cuerda');
+        agregarNotificacionFlotante('⚠️ Sin montaña libre al lado', '#EF4444');
       }
       return;
     }
@@ -1734,6 +1889,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
     const instancia = cuerdaObjeto ? inventario.find((item) => item.objeto_id === cuerdaObjeto.id) : undefined;
     if (!instancia) {
       mostrarMensaje('Necesitás una Cuerda en el inventario');
+      agregarNotificacionFlotante('⚠️ Falta Cuerda en Inventario', '#EF4444');
       return;
     }
 
@@ -1749,6 +1905,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
     const nuevasCuerdas = [...cuerdasConstruidas, par];
     setCuerdasConstruidas(nuevasCuerdas);
     mostrarMensaje('Cuerda colocada');
+    agregarNotificacionFlotante('🧗 Cuerda Colocada', '#10B981');
 
     const { error: errCuerdas } = await supabase
       .from('descubrimiento_jugador')
@@ -2216,15 +2373,13 @@ export default function PantallaJuego({ session }: { session: Session }) {
         </View>
       )}
 
+      {golpeCactus && <View style={styles.pantallaGolpeRed} pointerEvents="none" />}
 
 
 
 
-      {mensajeAccion && (
-        <View style={styles.mensajeAccion}>
-          <Text style={styles.mensajeAccionTexto}>{mensajeAccion}</Text>
-        </View>
-      )}
+
+
 
       <Modal visible={inventarioVisible} transparent animationType="fade" onRequestClose={() => setInventarioVisible(false)}>
         <View style={styles.modalFondo}>
@@ -2392,18 +2547,36 @@ export default function PantallaJuego({ session }: { session: Session }) {
                   />
 
 
-                  {textura && (
-                    <G transform={`translate(${pixel.x},${pixel.y}) ${textura.transform ?? ''}`}>
-                      <ImagenSvg
-                        href={textura.fuente}
-                        x={-(textura.ancho ?? ANCHO_TILE) / 2}
-                        y={textura.centrado ? -textura.alto / 2 : -ALTO_TILE / 2}
-                        width={textura.ancho ?? ANCHO_TILE}
-                        height={textura.alto}
-                        preserveAspectRatio="xMidYMid meet"
-                      />
-                    </G>
-                  )}
+                  {textura && (() => {
+                    const animActiva = animacionesAccion.find(
+                      (a) => a.tileX === tile.x && a.tileY === tile.y && Date.now() - a.inicioMs < a.duracionMs
+                    );
+                    let opacidadExtra = 1;
+
+                    if (animActiva) {
+                      const t = (Date.now() - animActiva.inicioMs) / animActiva.duracionMs;
+                      // El suelo permanece 100% fijo e inmóvil. Solo se desvanece suavemente la textura al terminar
+                      if (t > 0.35) {
+                        opacidadExtra = Math.max(0, 1 - (t - 0.35) / 0.65);
+                      }
+                    }
+
+                    return (
+                      <G
+                        transform={`translate(${pixel.x},${pixel.y}) ${textura.transform ?? ''}`}
+                        opacity={opacidadExtra}
+                      >
+                        <ImagenSvg
+                          href={textura.fuente}
+                          x={-(textura.ancho ?? ANCHO_TILE) / 2}
+                          y={textura.centrado ? -textura.alto / 2 : -ALTO_TILE / 2}
+                          width={textura.ancho ?? ANCHO_TILE}
+                          height={textura.alto}
+                          preserveAspectRatio="xMidYMid meet"
+                        />
+                      </G>
+                    );
+                  })()}
 
 
                   {esSueloCuerda && (
@@ -2480,6 +2653,90 @@ export default function PantallaJuego({ session }: { session: Session }) {
                 />
               );
             })()}
+
+            {animacionesAccion.map((anim) => {
+              const transcurrido = Date.now() - anim.inicioMs;
+              if (transcurrido >= anim.duracionMs) return null;
+              const t = transcurrido / anim.duracionMs;
+
+              const swingAngle = Math.sin(t * Math.PI * 5) * 50;
+              const sparkX = anim.pixelDestino.x;
+              const sparkY = anim.pixelDestino.y - 12;
+
+              return (
+                <G key={`tool-${anim.id}`}>
+                  {/* Herramienta blandiéndose en la mano del personaje */}
+                  <G
+                    transform={`translate(${anim.pixelOrigen.x + 12}, ${anim.pixelOrigen.y - 28}) rotate(${swingAngle}, 0, 0)`}
+                  >
+                    <IconoHerramientaAccion tipo={anim.tipo} />
+                  </G>
+
+                  {/* Partículas de impacto (astillas / chispas / lana) */}
+                  {anim.tipo === 'talar' && (
+                    <G transform={`translate(${sparkX}, ${sparkY})`}>
+                      <Circle cx={-10 + ((t * 80) % 25)} cy={-5 - Math.sin(t * 15) * 18} r={3.5} fill="#D97706" />
+                      <Circle cx={10 - ((t * 70) % 25)} cy={-10 - Math.cos(t * 18) * 15} r={2.5} fill="#F59E0B" />
+                      <Circle cx={-4 + ((t * 50) % 20)} cy={-15 - Math.sin(t * 12) * 22} r={3} fill="#B45309" />
+                    </G>
+                  )}
+
+                  {anim.tipo === 'picar' && (
+                    <G transform={`translate(${sparkX}, ${sparkY})`}>
+                      <Circle cx={-14 + ((t * 90) % 30)} cy={-6 - Math.sin(t * 20) * 22} r={2.5} fill="#FACC15" />
+                      <Circle cx={12 - ((t * 80) % 25)} cy={-12 - Math.cos(t * 22) * 18} r={3} fill="#EF4444" />
+                      <Circle cx={-2 + ((t * 60) % 20)} cy={-18 - Math.sin(t * 16) * 26} r={2} fill="#38BDF8" />
+                    </G>
+                  )}
+
+                  {anim.tipo === 'esquilar' && (
+                    <G transform={`translate(${sparkX}, ${sparkY})`}>
+                      <Circle cx={-10 + Math.sin(t * 10) * 18} cy={-12 - t * 30} r={7} fill="#F8FAFC" opacity={0.85} />
+                      <Circle cx={10 - Math.cos(t * 9) * 18} cy={-18 - t * 25} r={9} fill="#F1F5F9" opacity={0.75} />
+                    </G>
+                  )}
+
+                  {anim.tipo === 'abrir_cofre' && (
+                    <G transform={`translate(${sparkX}, ${sparkY})`}>
+                      <Circle cx={-12 + Math.sin(t * 12) * 22} cy={-10 - t * 35} r={4.5} fill="#FACC15" opacity={0.9} />
+                      <Circle cx={12 - Math.cos(t * 10) * 22} cy={-15 - t * 30} r={5.5} fill="#F4B93F" opacity={0.85} />
+                      <Path
+                        d={`M -20 0 L ${-30 - t * 15} ${-20 - t * 25} M 20 0 L ${30 + t * 15} ${-20 - t * 25} M 0 -10 L 0 ${-35 - t * 20}`}
+                        stroke="#FACC15"
+                        strokeWidth={2.5}
+                        strokeLinecap="round"
+                        opacity={Math.max(0, 1 - t)}
+                      />
+                    </G>
+                  )}
+                </G>
+              );
+            })}
+
+            {notificacionesFlotantes.map((notif) => {
+              const transcurrido = Date.now() - notif.inicioMs;
+              if (transcurrido > 1200) return null;
+              const progreso = transcurrido / 1200;
+              const offsetY = -progreso * 45;
+              const opacidad = 1 - Math.pow(progreso, 2);
+
+              return (
+                <G key={notif.id} transform={`translate(${notif.x},${notif.y + offsetY})`} opacity={opacidad}>
+                  <TextoSvg
+                    x={0}
+                    y={0}
+                    fill={notif.color}
+                    stroke="#0F172A"
+                    strokeWidth={1.5}
+                    fontSize={14}
+                    fontWeight="bold"
+                    textAnchor="middle"
+                  >
+                    {notif.texto}
+                  </TextoSvg>
+                </G>
+              );
+            })}
 
             {modalCuerdaVisible && tileActual
               ? opcionesCuerda.map((opcion) => {
@@ -2920,6 +3177,17 @@ const styles = StyleSheet.create({
     color: '#F6EFD8',
     fontWeight: '700',
     fontSize: 14,
+  },
+  pantallaGolpeRed: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(239, 68, 68, 0.3)',
+    borderColor: '#EF4444',
+    borderWidth: 6,
+    zIndex: 9999,
   },
 });
 

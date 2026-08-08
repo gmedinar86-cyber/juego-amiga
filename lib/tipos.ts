@@ -15,6 +15,7 @@ export interface TileBioma extends Coord {
   // aparte lo resuelve a `cofre` (con el objetoId real) antes de guardarse
   // en Supabase — el cliente nunca debería ver este campo en producción.
   cofrePendiente?: string | null;
+  texturaManual?: any;
 }
 
 export interface GridBioma {

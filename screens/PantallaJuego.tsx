@@ -440,6 +440,7 @@ function texturaParaTile(
       if (tile.recurso === 'madera' && !recolectado) return TEXTURA_ARBOL_SECO;
       return TEXTURA_ARENA;
     case 'rio':
+      if ((tile as any).texturaManual) return (tile as any).texturaManual;
       return texturaRio(tile, tilesPorClave);
     case 'oasis':
       return TEXTURA_OASIS;
@@ -827,6 +828,10 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const [zoom, setZoom] = useState(1);
   const [tamanoContenedor, setTamanoContenedor] = useState({ width: 0, height: 0 });
 
+
+
+
+
   // Refs con el valor más reciente de cada estado, para leerlos desde los
   // callbacks de gestos sin recrear los gestos (y sin depender de Reanimated).
   const cameraOffsetRef = useRef(cameraOffset);
@@ -1009,6 +1014,21 @@ export default function PantallaJuego({ session }: { session: Session }) {
         .single();
       if (errBioma2) throw errBioma2;
 
+      let biomaFinal = biomaData;
+      if (Platform.OS === 'web') {
+        const localGuardado = localStorage.getItem('MAPA_EDITADO_LOCAL');
+        if (localGuardado) {
+          try {
+            const parsed = JSON.parse(localGuardado);
+            if (parsed?.tiles?.tiles) {
+              biomaFinal = parsed;
+            }
+          } catch (e) {
+            console.error('[EDITOR-LOCAL] Error leyendo mapa local:', e);
+          }
+        }
+      }
+
       const { data: descData, error: errDesc } = await supabase
         .from('descubrimiento_jugador')
         .select('*')
@@ -1025,7 +1045,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
       // punto porque `bioma` recién se setea más abajo — armamos el mapa
       // local solo para esta llamada inicial.
       const tilesPorClaveInicial = new Map<string, TileBioma>(
-        biomaData.tiles.tiles.map((t: TileBioma) => [claveCoord(t), t])
+        biomaFinal.tiles.tiles.map((t: TileBioma) => [claveCoord(t), t])
       );
       const puentesTempranos = new Map<string, Coord>(
         (descData?.puentes_construidos ?? []).map((c) => [claveCoord(c), c])
@@ -1104,7 +1124,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
       descubiertasRef.current = reveladas;
 
       setProgreso(progresoData);
-      setBioma(biomaData);
+      setBioma(biomaFinal);
       setDescubiertas(reveladas);
       setPosicionVisual(posicionInicial);
       setCofresAbiertos(cofresIniciales);
@@ -1371,6 +1391,9 @@ export default function PantallaJuego({ session }: { session: Session }) {
   // se comitea, no un tick después) para que gestoTap, con su closure
   // congelada desde el montaje, siempre llame a la versión más reciente.
   iniciarCaminoHaciaRef.current = iniciarCaminoHacia;
+
+
+
 
   function mostrarMensaje(texto: string) {
     setMensajeAccion(texto);
@@ -2192,6 +2215,9 @@ export default function PantallaJuego({ session }: { session: Session }) {
           </View>
         </View>
       )}
+
+
+
 
 
       {mensajeAccion && (

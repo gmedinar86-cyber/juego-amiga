@@ -12,23 +12,12 @@ interface OpcionesGeneracion {
   intentosMaximos?: number;
 }
 
+import { MAPA_DESIERTO_FIJO } from './mapaFijo';
+
 export function generarTerreno({ n, intentosMaximos = 6 }: OpcionesGeneracion): GridBioma {
-  const spawn: Coord = { x: n - 1, y: n - 1 };
-  const portal: Coord = { x: 0, y: 0 };
-
-  let ultimoIntento: TileBioma[] = [];
-  for (let intento = 0; intento < intentosMaximos; intento++) {
-    ultimoIntento = generarIntento(n, spawn, portal);
-    if (hayConectividad(n, ultimoIntento, spawn, portal)) {
-      return { n, spawn, portal, tiles: ultimoIntento };
-    }
-  }
-
-  // Fallback (raro): tallar el camino que cruza la menor cantidad de
-  // obstáculos posible, para garantizar conectividad siempre.
-  const tiles = tallarCaminoMinimo(n, ultimoIntento, spawn, portal);
-  return { n, spawn, portal, tiles };
+  return MAPA_DESIERTO_FIJO;
 }
+
 
 function generarIntento(n: number, spawn: Coord, portal: Coord): TileBioma[] {
   const tiles: TileBioma[] = [];

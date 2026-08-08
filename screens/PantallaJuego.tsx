@@ -2321,58 +2321,60 @@ export default function PantallaJuego({ session }: { session: Session }) {
               </TouchableOpacity>
             </View>
           )}
-          {(mostrarBotonCofre ||
-            mostrarBotonRecurso ||
-            mostrarBotonPuente ||
-            mostrarBotonColocarCuerda ||
-            mostrarBotonSubir ||
-            mostrarBotonBajar) && (
-            <View style={styles.accionesTile} pointerEvents="box-none">
-              {mostrarBotonCofre && (
-                <TouchableOpacity style={styles.boton} onPress={abrirCofre}>
-                  <Text style={styles.botonTexto}>Abrir cofre</Text>
-                </TouchableOpacity>
-              )}
-              {mostrarBotonRecurso && (
-                <View>
-                  <TouchableOpacity
-                    style={[styles.boton, !recursoHabilitado && styles.botonDeshabilitado]}
-                    onPress={recolectar}
-                    disabled={!recursoHabilitado}
-                  >
-                    <Text style={styles.botonTexto}>Recolectar</Text>
-                  </TouchableOpacity>
-                  {!recursoHabilitado && (
-                    <Text style={styles.textoFaltaHerramienta}>
-                      Necesitás: {herramientaFaltante?.nombre ?? 'una herramienta'}
-                    </Text>
-                  )}
-                </View>
-              )}
-              {mostrarBotonPuente && (
-                <TouchableOpacity style={styles.boton} onPress={construirPuente}>
-                  <Text style={styles.botonTexto}>Construir puente</Text>
-                </TouchableOpacity>
-              )}
-              {mostrarBotonColocarCuerda && (
-                <TouchableOpacity style={styles.boton} onPress={colocarCuerda}>
-                  <Text style={styles.botonTexto}>Colocar cuerda</Text>
-                </TouchableOpacity>
-              )}
-              {mostrarBotonSubir && (
-                <TouchableOpacity style={styles.boton} onPress={subirMontana}>
-                  <Text style={styles.botonTexto}>Subir montaña</Text>
-                </TouchableOpacity>
-              )}
-              {mostrarBotonBajar && (
-                <TouchableOpacity style={styles.boton} onPress={bajarMontana}>
-                  <Text style={styles.botonTexto}>Bajar montaña</Text>
-                </TouchableOpacity>
+        </View>
+      </GestureDetector>
+
+      {(mostrarBotonCofre ||
+        mostrarBotonRecurso ||
+        mostrarBotonPuente ||
+        mostrarBotonColocarCuerda ||
+        mostrarBotonSubir ||
+        mostrarBotonBajar) && (
+        <View style={styles.accionesTile} pointerEvents="box-none">
+          {mostrarBotonCofre && (
+            <TouchableOpacity style={styles.boton} onPress={abrirCofre}>
+              <Text style={styles.botonTexto}>Abrir cofre</Text>
+            </TouchableOpacity>
+          )}
+          {mostrarBotonRecurso && (
+            <View>
+              <TouchableOpacity
+                style={[styles.boton, !recursoHabilitado && styles.botonDeshabilitado]}
+                onPress={recolectar}
+                disabled={!recursoHabilitado}
+              >
+                <Text style={styles.botonTexto}>Recolectar</Text>
+              </TouchableOpacity>
+              {!recursoHabilitado && (
+                <Text style={styles.textoFaltaHerramienta}>
+                  Necesitás: {herramientaFaltante?.nombre ?? 'una herramienta'}
+                </Text>
               )}
             </View>
           )}
+          {mostrarBotonPuente && (
+            <TouchableOpacity style={styles.boton} onPress={construirPuente}>
+              <Text style={styles.botonTexto}>Construir puente</Text>
+            </TouchableOpacity>
+          )}
+          {mostrarBotonColocarCuerda && (
+            <TouchableOpacity style={styles.boton} onPress={colocarCuerda}>
+              <Text style={styles.botonTexto}>Colocar cuerda</Text>
+            </TouchableOpacity>
+          )}
+          {mostrarBotonSubir && (
+            <TouchableOpacity style={styles.boton} onPress={subirMontana}>
+              <Text style={styles.botonTexto}>Subir montaña</Text>
+            </TouchableOpacity>
+          )}
+          {mostrarBotonBajar && (
+            <TouchableOpacity style={styles.boton} onPress={bajarMontana}>
+              <Text style={styles.botonTexto}>Bajar montaña</Text>
+            </TouchableOpacity>
+          )}
         </View>
-      </GestureDetector>
+      )}
+
 
 
       <Text style={styles.ayuda}>Toca una casilla ya descubierta para caminar hasta ahí. Arrastra para mirar el mapa.</Text>
@@ -2386,7 +2388,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#141B26',
     paddingTop: 56,
     paddingHorizontal: 20,
+    position: 'relative',
   },
+
   centrado: {
     flex: 1,
     backgroundColor: '#141B26',
@@ -2541,15 +2545,16 @@ const styles = StyleSheet.create({
   },
   accionesTile: {
     position: 'absolute',
-    bottom: 16,
-    left: 0,
-    right: 0,
+    bottom: 44,
+    left: 20,
+    right: 20,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
     gap: 12,
-    zIndex: 20,
+    zIndex: 100,
   },
+
 
   textoFaltaHerramienta: {
     color: '#E8746A',

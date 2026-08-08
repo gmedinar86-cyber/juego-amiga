@@ -225,7 +225,7 @@ const TEXTURA_COFRE_CAJA = conBaseEnVertice(
 // sheep.png tiene el mismo problema de margen que cactus.png (43px abajo
 // contra ~12px en los otros 3 bordes) — mismo fix.
 const TEXTURA_OVEJA = conBaseEnVertice(
-  crearTextura(require('../assets/entorno/oveja limpia.png'), 1024, 1024)
+  crearTexturaEscalada(require('../assets/entorno/camello.png'), 1024, 1536, 0.70)
 );
 
 const TEXTURA_ROCA_CLASE = conBaseEnVertice(
@@ -329,6 +329,50 @@ function resolverBordesRio(tile: TileBioma, tilesPorClave: Map<string, TileBioma
   });
 
   return bordes;
+}
+
+function pseudoHash(x: number, y: number, seed: number = 0): number {
+  const v = Math.sin(x * 12.9898 + y * 78.233 + seed * 43.123) * 43758.5453;
+  return v - Math.floor(v);
+}
+
+interface PiedraRelieve {
+  x: number;
+  y: number;
+  rx: number;
+  ry: number;
+  colorBase: string;
+  colorBrillo: string;
+}
+
+function obtenerPiedrasArena(tx: number, ty: number): PiedraRelieve[] {
+  const prob = pseudoHash(tx, ty, 1);
+  if (prob > 0.35) return [];
+
+  const cantidad = 1 + Math.floor(pseudoHash(tx, ty, 2) * 3);
+  const piedras: PiedraRelieve[] = [];
+
+  const coloresBase = ['#C29B58', '#B08A46', '#9E7836'];
+  const coloresBrillo = ['#F2D7A0', '#E5C586', '#D6B370'];
+
+  for (let i = 0; i < cantidad; i++) {
+    const px = (pseudoHash(tx, ty, 10 + i) - 0.5) * 40;
+    const py = (pseudoHash(tx, ty, 20 + i) - 0.5) * 18;
+    const rx = 1.8 + pseudoHash(tx, ty, 30 + i) * 2.2;
+    const ry = 1.2 + pseudoHash(tx, ty, 40 + i) * 1.4;
+    const colorIdx = Math.floor(pseudoHash(tx, ty, 50 + i) * coloresBase.length);
+
+    piedras.push({
+      x: px,
+      y: py,
+      rx,
+      ry,
+      colorBase: coloresBase[colorIdx],
+      colorBrillo: coloresBrillo[colorIdx],
+    });
+  }
+
+  return piedras;
 }
 
 const BORDE_DELTA: Record<Borde, Coord> = {
@@ -923,6 +967,23 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const [modalCuerdaVisible, setModalCuerdaVisible] = useState(false);
   const [opcionesCuerda, setOpcionesCuerda] = useState<CuerdaConstruida[]>([]);
   const [modalAvisoInfo, setModalAvisoInfo] = useState<{ titulo: string; mensaje: string } | null>(null);
+
+  const [faseOndaRio, setFaseOndaRio] = useState(0);
+
+  useEffect(() => {
+    let animId: number;
+    let activo = true;
+    const loop = () => {
+      if (!activo) return;
+      setFaseOndaRio((Date.now() / 700) % (Math.PI * 2));
+      animId = requestAnimationFrame(loop);
+    };
+    animId = requestAnimationFrame(loop);
+    return () => {
+      activo = false;
+      cancelAnimationFrame(animId);
+    };
+  }, []);
 
   function mostrarAvisoModal(titulo: string, mensaje: string) {
     setModalAvisoInfo({ titulo, mensaje });
@@ -2675,22 +2736,68 @@ export default function PantallaJuego({ session }: { session: Session }) {
                     strokeWidth={sinCamino ? 2.5 : 0}
                   />
 
-                  {esRioTile && bordesRioCalculados.length > 0 && (
-                    <G transform={`translate(${pixel.x},${pixel.y})`}>
-                      {bordesRioCalculados.includes('NW') && (
-                        <Path d="M -36,0 L 0,-18" stroke="#946E2E" strokeWidth={3.5} strokeLinecap="round" />
-                      )}
-                      {bordesRioCalculados.includes('NE') && (
-                        <Path d="M 0,-18 L 36,0" stroke="#946E2E" strokeWidth={3.5} strokeLinecap="round" />
-                      )}
-                      {bordesRioCalculados.includes('SE') && (
-                        <Path d="M 36,0 L 0,18" stroke="#946E2E" strokeWidth={3.5} strokeLinecap="round" />
-                      )}
-                      {bordesRioCalculados.includes('SW') && (
-                        <Path d="M 0,18 L -36,0" stroke="#946E2E" strokeWidth={3.5} strokeLinecap="round" />
-                      )}
-                    </G>
-                  )}
+                  {esRioTile && (() => {
+                    const desfasado = tile.x * 0.4 + tile.y * 0.5;
+                    const shiftX1 = Math.sin(faseOndaRio + desfasado) * 2.2;
+                    const shiftY1 = Math.cos(faseOndaRio + desfasado) * 1.1;
+                    const shiftX2 = Math.cos(faseOndaRio + desfasado * 0.7) * 2.0;
+                    const shiftY2 = Math.sin(faseOndaRio + desfasado * 0.7) * 1.0;
+                    const opacidad1 = 0.35 + Math.sin(faseOndaRio + tile.x * 0.5) * 0.12;
+                    const opacidad2 = 0.30 + Math.cos(faseOndaRio + tile.y * 0.5) * 0.12;
+
+                    return (
+                      <G transform={`translate(${pixel.x},${pixel.y})`}>
+                        {/* Ondas animadas de corriente fluida suave */}
+                        <Path
+                          d={`M ${-22 + shiftX1},${-6 + shiftY1} Q ${-6 + shiftX1},${-11 + shiftY1} ${4 + shiftX1},${-6 + shiftY1} Q ${14 + shiftX1},${-1 + shiftY1} ${22 + shiftX1},${-6 + shiftY1}`}
+                          stroke="#BAE6FD"
+                          strokeWidth={1.5}
+                          strokeLinecap="round"
+                          opacity={opacidad1}
+                        />
+                        <Path
+                          d={`M ${-18 + shiftX2},${4 + shiftY2} Q ${-4 + shiftX2},${-1 + shiftY2} ${8 + shiftX2},4 ${16 + shiftX2},${9 + shiftY2} ${24 + shiftX2},${4 + shiftY2}`}
+                          stroke="#E0F2FE"
+                          strokeWidth={1.3}
+                          strokeLinecap="round"
+                          opacity={opacidad2}
+                        />
+
+                        {/* Orillas de arena oscura */}
+                        {bordesRioCalculados.includes('NW') && (
+                          <Path d="M -36,0 L 0,-18" stroke="#946E2E" strokeWidth={3.5} strokeLinecap="round" />
+                        )}
+                        {bordesRioCalculados.includes('NE') && (
+                          <Path d="M 0,-18 L 36,0" stroke="#946E2E" strokeWidth={3.5} strokeLinecap="round" />
+                        )}
+                        {bordesRioCalculados.includes('SE') && (
+                          <Path d="M 36,0 L 0,18" stroke="#946E2E" strokeWidth={3.5} strokeLinecap="round" />
+                        )}
+                        {bordesRioCalculados.includes('SW') && (
+                          <Path d="M 0,18 L -36,0" stroke="#946E2E" strokeWidth={3.5} strokeLinecap="round" />
+                        )}
+                      </G>
+                    );
+                  })()}
+
+                  {revelada && tile.tipo === 'arena' && (() => {
+                    const piedras = obtenerPiedrasArena(tile.x, tile.y);
+                    if (piedras.length === 0) return null;
+                    return (
+                      <G transform={`translate(${pixel.x},${pixel.y})`}>
+                        {piedras.map((p, idx) => (
+                          <G key={idx} transform={`translate(${p.x},${p.y})`}>
+                            {/* Sombra suave de la piedrecita */}
+                            <Ellipse cx={0.5} cy={0.8} rx={p.rx + 0.3} ry={p.ry * 0.7} fill="#846328" opacity={0.35} />
+                            {/* Cuerpo base de la piedra */}
+                            <Ellipse cx={0} cy={0} rx={p.rx} ry={p.ry} fill={p.colorBase} />
+                            {/* Brillo/Luz superior */}
+                            <Ellipse cx={-0.3} cy={-0.4} rx={p.rx * 0.5} ry={p.ry * 0.4} fill={p.colorBrillo} opacity={0.7} />
+                          </G>
+                        ))}
+                      </G>
+                    );
+                  })()}
 
 
                   {textura && textura !== TEXTURA_ARENA && !esRioTile && (() => {

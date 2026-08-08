@@ -6,8 +6,16 @@ import Svg, { Circle, Ellipse, G, Image as ImagenSvg, Path, Polygon, Polyline, T
 function resolverFuenteImagen(fuente: any): any {
   if (!fuente) return undefined;
   if (typeof fuente === 'string') return fuente;
-  const resolved = RNImage.resolveAssetSource(fuente);
-  return resolved ? resolved.uri : fuente;
+  if (fuente && typeof fuente === 'object' && typeof fuente.default === 'string') return fuente.default;
+  try {
+    if (typeof RNImage?.resolveAssetSource === 'function') {
+      const resolved = RNImage.resolveAssetSource(fuente);
+      if (resolved?.uri) return resolved.uri;
+    }
+  } catch (e) {
+    // Fallback silencioso
+  }
+  return fuente;
 }
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';

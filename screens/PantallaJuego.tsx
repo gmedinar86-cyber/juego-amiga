@@ -964,8 +964,8 @@ function buscarCuerdaPorMontana(cuerdas: CuerdaConstruida[], coord: Coord): Cuer
 
 function BarraVidaHUD({ vidaActual, vidaMaxima }: { vidaActual: number; vidaMaxima: number }) {
   const proporcion = Math.max(0, Math.min(1, vidaActual / vidaMaxima));
-  const anchoTotal = 220;
-  const altoBarra = anchoTotal * (1024 / 1536); // 146.67px
+  const anchoTotal = 150;
+  const altoBarra = anchoTotal * (1024 / 1536); // 100px
 
   const leftMin = anchoTotal * (351 / 1536);
   const purpleWidth = anchoTotal * ((1426 - 351) / 1536);
@@ -976,7 +976,7 @@ function BarraVidaHUD({ vidaActual, vidaMaxima }: { vidaActual: number; vidaMaxi
   const mascaraAncho = purpleWidth * (1 - proporcion);
 
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: -35, marginBottom: -35 }}>
+    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: -22, marginBottom: -22 }}>
       <View style={{ width: anchoTotal, height: altoBarra, position: 'relative' }}>
         <RNImage
           source={require('../assets/entorno/barra de vida.png')}
@@ -993,7 +993,7 @@ function BarraVidaHUD({ vidaActual, vidaMaxima }: { vidaActual: number; vidaMaxi
               width: mascaraAncho,
               height: purpleHeight,
               backgroundColor: '#120A21',
-              borderRadius: 2,
+              borderRadius: 1,
             }}
           />
         )}
@@ -1001,8 +1001,8 @@ function BarraVidaHUD({ vidaActual, vidaMaxima }: { vidaActual: number; vidaMaxi
 
       <Text
         style={{
-          marginLeft: -10,
-          fontSize: 18,
+          marginLeft: -6,
+          fontSize: 14,
           fontWeight: '900',
           color: '#FFFFFF',
           textShadowColor: 'rgba(0, 0, 0, 0.9)',
@@ -2617,15 +2617,8 @@ export default function PantallaJuego({ session }: { session: Session }) {
       ) : (
         <View style={styles.encabezado}>
           <View>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Text style={styles.titulo}>{bioma.nombre}</Text>
-              <View style={{ marginLeft: 16 }}>
-                <BarraVidaHUD vidaActual={progreso.vida_actual} vidaMaxima={VIDA_MAXIMA} />
-              </View>
-            </View>
-            <Text style={styles.subtitulo}>
-              Nivel {progreso.nivel} · Fuerza {progreso.fuerza}
-            </Text>
+            <Text style={styles.titulo}>{bioma.nombre}</Text>
+            <BarraVidaHUD vidaActual={progreso.vida_actual} vidaMaxima={VIDA_MAXIMA} />
           </View>
           <View style={styles.accionesEncabezado}>
             <TouchableOpacity onPress={() => setInventarioVisible(true)}>
@@ -2661,6 +2654,9 @@ export default function PantallaJuego({ session }: { session: Session }) {
         <View style={styles.modalFondo}>
           <View style={styles.modalContenido}>
             <Text style={styles.modalTitulo}>Inventario</Text>
+            <Text style={styles.modalInfoPersonaje}>
+              Nivel {progreso?.nivel ?? 1} · Fuerza {progreso?.fuerza ?? 10}
+            </Text>
             {filasInventario.length === 0 ? (
               <Text style={styles.modalVacio}>Todavía no tenés objetos.</Text>
             ) : (
@@ -3484,6 +3480,13 @@ const styles = StyleSheet.create({
     color: '#F6EFD8',
     fontSize: 18,
     fontWeight: '800',
+    marginBottom: 12,
+  },
+  modalInfoPersonaje: {
+    color: '#7E8BA3',
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: -8,
     marginBottom: 12,
   },
   modalVacio: {

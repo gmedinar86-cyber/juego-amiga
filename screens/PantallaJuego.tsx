@@ -3206,14 +3206,24 @@ export default function PantallaJuego({ session }: { session: Session }) {
                         ? require('../assets/personajes/maga-este.png')
                         : require('../assets/personajes/maga-fuego-sprite.png')));
 
-              const aspectoJugador = claseJugador === 'arquero'
-                ? (1024 / 1536)
-                : (modoRender === 'espalda'
-                    ? (610 / 1150)
-                    : (modoRender === 'este'
-                        ? (475 / 1150)
-                        : (628 / 1289)));
-              const spriteAlto = ALTO_TILE * 1.1;
+              const spriteAltoBase = ALTO_TILE * 1.1;
+              let spriteAlto = spriteAltoBase;
+              let aspectoJugador = 628 / 1289;
+
+              if (claseJugador === 'arquero') {
+                spriteAlto = spriteAltoBase;
+                aspectoJugador = 1024 / 1536;
+              } else if (modoRender === 'espalda') {
+                spriteAlto = spriteAltoBase * (1150 / 1289);
+                aspectoJugador = 610 / 1150;
+              } else if (modoRender === 'este') {
+                spriteAlto = spriteAltoBase * (1150 / 1289);
+                aspectoJugador = 475 / 1150;
+              } else {
+                spriteAlto = spriteAltoBase;
+                aspectoJugador = 628 / 1289;
+              }
+
               const spriteAncho = spriteAlto * aspectoJugador;
 
               const scaleX = espejoRender ? -1 : 1;
@@ -3222,18 +3232,17 @@ export default function PantallaJuego({ session }: { session: Session }) {
                 key: 'jugador-sprite',
                 sortY: pixelJugadorBase.y + 0.1,
                 render: () => (
-                  <G
-                    key="jugador-sprite"
-                    transform={`translate(${pixelJugadorBase.x}, ${pixelJugadorY}) scale(${scaleX}, 1)`}
-                  >
-                    <ImagenSvg
-                      href={resolverFuenteImagen(spriteJugadorActual)}
-                      x={-spriteAncho / 2}
-                      y={-spriteAlto}
-                      width={spriteAncho}
-                      height={spriteAlto}
-                      preserveAspectRatio="xMidYMid meet"
-                    />
+                  <G key="jugador-sprite" transform={`translate(${pixelJugadorBase.x}, ${pixelJugadorY})`}>
+                    <G transform={`scale(${scaleX}, 1)`}>
+                      <ImagenSvg
+                        href={resolverFuenteImagen(spriteJugadorActual)}
+                        x={-spriteAncho / 2}
+                        y={-spriteAlto}
+                        width={spriteAncho}
+                        height={spriteAlto}
+                        preserveAspectRatio="xMidYMid meet"
+                      />
+                    </G>
                   </G>
                 ),
               });

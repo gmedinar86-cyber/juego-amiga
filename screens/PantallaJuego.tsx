@@ -3187,9 +3187,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
                 claveCoord({ x: Math.round(posicionVisual.x), y: Math.round(posicionVisual.y) })
               );
               const estaEnMontana = tileVisualJugador?.tipo === 'montana';
-              const pasoTime = Date.now() / 110;
-              const bobY = caminando ? Math.abs(Math.sin(pasoTime)) * 2.5 : 0;
-              const pixelJugadorY = pixelJugadorBase.y + (estaEnMontana ? -28 : 0) - bobY;
+              const pixelJugadorY = pixelJugadorBase.y + (estaEnMontana ? -28 : 0);
 
               const tGiro = Date.now() - giroInicioMsRef.current;
               let modoRender = modoVistaRef.current;

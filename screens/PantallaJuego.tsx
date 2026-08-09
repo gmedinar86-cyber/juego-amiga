@@ -2241,25 +2241,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
         setError(errHacha.message);
         return;
       }
-      inventarioNuevo.push(hachaInicial);
-    }
-
-    const cuerdaObj = Array.from(catalogoObjetos.values()).find((o) => o.nombre === 'Cuerda');
-    if (cuerdaObj) {
-      const { data: cuerdasIniciales, error: errCuerdas } = await supabase
-        .from('inventario_jugador')
-        .insert([
-          { usuario_id: session.user.id, objeto_id: cuerdaObj.id, usos_restantes: null },
-          { usuario_id: session.user.id, objeto_id: cuerdaObj.id, usos_restantes: null },
-        ])
-        .select();
-      if (errCuerdas) {
-        setError(errCuerdas.message);
-        return;
-      }
-      if (cuerdasIniciales) {
-        inventarioNuevo.push(...cuerdasIniciales);
-      }
+      inventarioNuevo = [hachaInicial];
     }
     setInventario(inventarioNuevo);
 

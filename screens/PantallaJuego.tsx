@@ -1044,13 +1044,6 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const [posicionVisual, setPosicionVisual] = useState<Coord>({ x: 0, y: 0 });
   const [casillaSinCamino, setCasillaSinCamino] = useState<string | null>(null);
   const [caminando, setCaminando] = useState(false);
-  const [modoVista, setModoVista] = useState<'frente' | 'espalda' | 'este'>('frente');
-  const modoVistaRef = useRef<'frente' | 'espalda' | 'este'>('frente');
-  const [espejo, setEspejo] = useState(false);
-  const espejoRef = useRef(false);
-  const giroInicioMsRef = useRef(0);
-  const modoTransicionRef = useRef(false);
-  const espejoTransicionRef = useRef(false);
   const [catalogoObjetos, setCatalogoObjetos] = useState<Map<string, Objeto>>(new Map());
   const [inventario, setInventario] = useState<InventarioItem[]>([]);
   const [cofresAbiertos, setCofresAbiertos] = useState<Map<string, Coord>>(new Map());
@@ -1460,42 +1453,6 @@ export default function PantallaJuego({ session }: { session: Session }) {
   function animarPaso(destino: Coord, alTerminar: () => void) {
     const origen = posicionVisualRef.current;
     const inicio = Date.now();
-
-    const dx = destino.x - origen.x;
-    const dy = destino.y - origen.y;
-    const deltaScreenX = dx - dy;
-    const deltaScreenY = dx + dy;
-
-    let nuevoModo: 'frente' | 'espalda' | 'este' = modoVistaRef.current;
-    let nuevoEspejo = espejoRef.current;
-
-    if (Math.abs(deltaScreenY) <= 0.01 && Math.abs(deltaScreenX) > 0.01) {
-      nuevoModo = 'este';
-      nuevoEspejo = deltaScreenX < 0;
-    } else if (deltaScreenY < -0.01) {
-      nuevoModo = 'espalda';
-      nuevoEspejo = false;
-    } else if (deltaScreenY > 0.01) {
-      nuevoModo = 'frente';
-      nuevoEspejo = false;
-    }
-
-    const modoAnterior = modoVistaRef.current;
-    if (
-      (modoAnterior === 'frente' && nuevoModo === 'espalda') ||
-      (modoAnterior === 'espalda' && nuevoModo === 'frente')
-    ) {
-      giroInicioMsRef.current = Date.now();
-      modoTransicionRef.current = true;
-      espejoTransicionRef.current = deltaScreenX < 0;
-    } else {
-      modoTransicionRef.current = false;
-    }
-
-    modoVistaRef.current = nuevoModo;
-    espejoRef.current = nuevoEspejo;
-    setModoVista(nuevoModo);
-    setEspejo(nuevoEspejo);
 
     function frame() {
       const t = Math.min((Date.now() - inicio) / DURACION_PASO_MS, 1);
@@ -3189,61 +3146,26 @@ export default function PantallaJuego({ session }: { session: Session }) {
               const estaEnMontana = tileVisualJugador?.tipo === 'montana';
               const pixelJugadorY = pixelJugadorBase.y + (estaEnMontana ? -28 : 0);
 
-              const tGiro = Date.now() - giroInicioMsRef.current;
-              let modoRender = modoVistaRef.current;
-              let espejoRender = espejoRef.current;
-
-              if (tGiro < 120 && modoTransicionRef.current) {
-                modoRender = 'este';
-                espejoRender = espejoTransicionRef.current;
-              }
-
               const spriteJugadorActual = claseJugador === 'arquero'
                 ? require('../assets/personajes/arquero.png')
-                : (modoRender === 'espalda'
-                    ? require('../assets/personajes/maga-espalda.png')
-                    : (modoRender === 'este'
-                        ? require('../assets/personajes/maga-este.png')
-                        : require('../assets/personajes/maga-fuego-sprite.png')));
-
-              const spriteAltoBase = ALTO_TILE * 1.1;
-              let spriteAlto = spriteAltoBase;
-              let aspectoJugador = 628 / 1289;
-
-              if (claseJugador === 'arquero') {
-                spriteAlto = spriteAltoBase;
-                aspectoJugador = 1024 / 1536;
-              } else if (modoRender === 'espalda') {
-                spriteAlto = spriteAltoBase * (1150 / 1289);
-                aspectoJugador = 610 / 1150;
-              } else if (modoRender === 'este') {
-                spriteAlto = spriteAltoBase * (1150 / 1289);
-                aspectoJugador = 475 / 1150;
-              } else {
-                spriteAlto = spriteAltoBase;
-                aspectoJugador = 628 / 1289;
-              }
-
+                : require('../assets/personajes/maga-fuego-sprite.png');
+              const aspectoJugador = claseJugador === 'arquero' ? (1024 / 1536) : (628 / 1289);
+              const spriteAlto = ALTO_TILE * 1.1;
               const spriteAncho = spriteAlto * aspectoJugador;
-
-              const scaleX = espejoRender ? -1 : 1;
 
               elementosElevados.push({
                 key: 'jugador-sprite',
                 sortY: pixelJugadorBase.y + 0.1,
                 render: () => (
-                  <G key="jugador-sprite" transform={`translate(${pixelJugadorBase.x}, ${pixelJugadorY})`}>
-                    <G transform={`scale(${scaleX}, 1)`}>
-                      <ImagenSvg
-                        href={resolverFuenteImagen(spriteJugadorActual)}
-                        x={-spriteAncho / 2}
-                        y={-spriteAlto}
-                        width={spriteAncho}
-                        height={spriteAlto}
-                        preserveAspectRatio="xMidYMid meet"
-                      />
-                    </G>
-                  </G>
+                  <ImagenSvg
+                    key="jugador-sprite"
+                    href={resolverFuenteImagen(spriteJugadorActual)}
+                    x={pixelJugadorBase.x - spriteAncho / 2}
+                    y={pixelJugadorY - spriteAlto}
+                    width={spriteAncho}
+                    height={spriteAlto}
+                    preserveAspectRatio="xMidYMid meet"
+                  />
                 ),
               });
 

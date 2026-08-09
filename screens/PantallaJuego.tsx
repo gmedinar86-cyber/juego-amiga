@@ -1616,9 +1616,38 @@ export default function PantallaJuego({ session }: { session: Session }) {
     animarPaso(casillaAnterior, () => setCaminando(false));
   }
 
+  function revelarFogProactivo(paso: Coord) {
+    if (!bioma) return;
+    const tileTarget = tilesPorClave.get(claveCoord(paso));
+    const enMontana = tileTarget?.tipo === 'montana';
+    const radio = enMontana ? RADIO_VISION_MONTANA : (claseJugador === 'arquero' ? 2 : RADIO_VISION_DEFAULT);
+    const predicadoVision = enMontana ? (t: TileBioma) => t.tipo === 'montana' : undefined;
+
+    const actualizadas = fusionarDescubiertas(
+      descubiertasRef.current,
+      paso,
+      tilesPorClave,
+      radio,
+      predicadoVision
+    );
+
+    if (actualizadas.size !== descubiertasRef.current.size) {
+      descubiertasRef.current = actualizadas;
+      setDescubiertas(actualizadas);
+
+      if (descubrimientoId) {
+        supabase
+          .from('descubrimiento_jugador')
+          .update({ casillas_descubiertas: Array.from(actualizadas.values()) })
+          .eq('id', descubrimientoId);
+      }
+    }
+  }
+
   function ejecutarSiguientePaso() {
     const destino = colaRef.current[0];
     if (!destino) return;
+    revelarFogProactivo(destino);
     animarPaso(destino, () => completarPaso(destino));
   }
 
@@ -1664,9 +1693,11 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
     if (enCaminoActual) {
       colaRef.current = [colaRef.current[0], ...tramoNuevo];
+      if (tramoNuevo[0]) revelarFogProactivo(tramoNuevo[0]);
     } else {
       colaRef.current = tramoNuevo;
       if (colaRef.current.length > 0) {
+        revelarFogProactivo(colaRef.current[0]);
         setCaminando(true);
         ejecutarSiguientePaso();
       }

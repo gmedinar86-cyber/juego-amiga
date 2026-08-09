@@ -218,7 +218,9 @@ const TEXTURA_CACTUS_PELIGROSO = conBaseEnVertice(
 // Recursos con arte real (reemplazan los íconos placeholder de piedra/lana
 // y el cofre): mismo estilo de bloque sobre base de arena que sand/mountain,
 // así que van con conAlturaExtra como esas.
-const TEXTURA_ROCA_MINERAL = conAlturaExtra(crearTextura(require('../assets/entorno/mining-rock.png'), 249, 232));
+const TEXTURA_ROCA_MINERAL = conBaseEnVertice(
+  crearTexturaEscalada(require('../assets/entorno/piedra limpia.png'), 1536, 1024, 0.70)
+);
 const TEXTURA_COFRE_CAJA = conBaseEnVertice(
   crearTextura(require('../assets/entorno/cofre limpio.png'), 1024, 1024)
 );
@@ -252,10 +254,10 @@ function esCuerdaTrasera(cuerda: CuerdaConstruida): boolean {
   return dx + dy < 0;
 }
 
-const TEXTURA_PUENTE_NORMAL = conAlturaExtra(crearTextura(require('../assets/entorno/puente-madera.png'), 600, 466));
+const TEXTURA_PUENTE_NORMAL = conBaseEnVertice(crearTextura(require('../assets/entorno/puente-madera.png'), 600, 466));
 const TEXTURA_PUENTE_VOLTEADO = {
   ...TEXTURA_PUENTE_NORMAL,
-  transform: 'scale(-1, 1)',
+  transform: `${TEXTURA_PUENTE_NORMAL.transform ?? ''} scale(-1, 1)`,
 };
 
 
@@ -2697,33 +2699,19 @@ export default function PantallaJuego({ session }: { session: Session }) {
           }}
         >
           <Svg width="100%" height="100%" viewBox={geometria.viewBox} preserveAspectRatio="xMidYMid slice">
+            {/* PASO 1: Capa de suelo base (Rombo de arena/río, ondas animadas de río, piedrecitas y marcas de cuerda) */}
             {geometria.puntos.map(({ tile, pixel }) => {
               const clave = claveCoord(tile);
               const descubierta = descubiertas.has(clave);
               const revelada = DEBUG_SIN_FOG || descubierta;
               const sinCamino = casillaSinCamino === clave;
-              const esPuenteTile = tile.tipo === 'rio' && puentesConstruidos.has(clave);
-              const relleno = revelada ? (esPuenteTile ? COLOR_PUENTE : colorTile(tile.tipo)) : '#1B2536';
-              const textura = revelada
-                ? esPuenteTile
-                  ? texturaPuenteOrientado(tile, tilesPorClave)
-                  : (mapaTexturas.get(clave) ?? null)
-                : null;
-
-              const esSueloCuerda = revelada && cuerdasConstruidas.some((c) => coordsIguales(c.suelo, tile));
-              const opcionCuerdaPar =
-                revelada && modalCuerdaVisible && tileActual
-                  ? opcionesCuerda.find((o) =>
-                      tileActual.tipo === 'montana' ? coordsIguales(o.suelo, tile) : coordsIguales(o.montana, tile)
-                    )
-                  : undefined;
-
-              const esRioTile = tile.tipo === 'rio' && !esPuenteTile && revelada;
+              const esRioTile = tile.tipo === 'rio' && revelada;
               const bordesRioCalculados = esRioTile ? (CONFIG_RIO_PRUEBA[clave]?.bordes ?? resolverBordesRio(tile, tilesPorClave)) : [];
-              const rellenoFinal = esRioTile ? '#3B8EC2' : relleno;
+              const rellenoFinal = revelada ? (esRioTile ? '#3B8EC2' : colorTile(tile.tipo)) : '#1B2536';
+              const esSueloCuerda = revelada && cuerdasConstruidas.some((c) => coordsIguales(c.suelo, tile));
 
               return (
-                <Fragment key={clave}>
+                <Fragment key={`suelo-${clave}`}>
                   <Polygon
                     points={ROMBO_BASE_POINTS}
                     transform={`translate(${pixel.x},${pixel.y})`}
@@ -2743,7 +2731,6 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
                     return (
                       <G transform={`translate(${pixel.x},${pixel.y})`}>
-                        {/* Ondas animadas de corriente fluida suave */}
                         <Path
                           d={`M ${-22 + shiftX1},${-6 + shiftY1} Q ${-6 + shiftX1},${-11 + shiftY1} ${4 + shiftX1},${-6 + shiftY1} Q ${14 + shiftX1},${-1 + shiftY1} ${22 + shiftX1},${-6 + shiftY1}`}
                           stroke="#BAE6FD"
@@ -2758,8 +2745,6 @@ export default function PantallaJuego({ session }: { session: Session }) {
                           strokeLinecap="round"
                           opacity={opacidad2}
                         />
-
-                        {/* Orillas de arena oscura */}
                         {bordesRioCalculados.includes('NW') && (
                           <Path d="M -36,0 L 0,-18" stroke="#946E2E" strokeWidth={3.5} strokeLinecap="round" />
                         )}
@@ -2783,50 +2768,14 @@ export default function PantallaJuego({ session }: { session: Session }) {
                       <G transform={`translate(${pixel.x},${pixel.y})`}>
                         {piedras.map((p, idx) => (
                           <G key={idx} transform={`translate(${p.x},${p.y})`}>
-                            {/* Sombra suave de la piedrecita */}
                             <Ellipse cx={0.5} cy={0.8} rx={p.rx + 0.3} ry={p.ry * 0.7} fill="#846328" opacity={0.35} />
-                            {/* Cuerpo base de la piedra */}
                             <Ellipse cx={0} cy={0} rx={p.rx} ry={p.ry} fill={p.colorBase} />
-                            {/* Brillo/Luz superior */}
                             <Ellipse cx={-0.3} cy={-0.4} rx={p.rx * 0.5} ry={p.ry * 0.4} fill={p.colorBrillo} opacity={0.7} />
                           </G>
                         ))}
                       </G>
                     );
                   })()}
-
-
-                  {textura && textura !== TEXTURA_ARENA && !esRioTile && (() => {
-                    const animActiva = animacionesAccion.find(
-                      (a) => a.tileX === tile.x && a.tileY === tile.y && Date.now() - a.inicioMs < a.duracionMs
-                    );
-                    let opacidadExtra = 1;
-
-                    if (animActiva) {
-                      const t = (Date.now() - animActiva.inicioMs) / animActiva.duracionMs;
-                      // El suelo permanece 100% fijo e inmóvil. Solo se desvanece suavemente la textura al terminar
-                      if (t > 0.35) {
-                        opacidadExtra = Math.max(0, 1 - (t - 0.35) / 0.65);
-                      }
-                    }
-
-                    return (
-                      <G
-                        transform={`translate(${pixel.x},${pixel.y}) ${textura.transform ?? ''}`}
-                        opacity={opacidadExtra}
-                      >
-                        <ImagenSvg
-                          href={resolverFuenteImagen(textura.fuente)}
-                          x={-(textura.ancho ?? ANCHO_TILE) / 2}
-                          y={textura.centrado ? -textura.alto / 2 : -ALTO_TILE / 2}
-                          width={textura.ancho ?? ANCHO_TILE}
-                          height={textura.alto}
-                          preserveAspectRatio="xMidYMid meet"
-                        />
-                      </G>
-                    );
-                  })()}
-
 
                   {esSueloCuerda && (
                     <G transform={`translate(${pixel.x},${pixel.y})`}>
@@ -2849,58 +2798,111 @@ export default function PantallaJuego({ session }: { session: Session }) {
                   )}
                 </Fragment>
               );
-
-
-
             })}
 
+            {/* PASO 2: Capa de objetos 3D y personaje ordenados en profundidad Z (Painter's Algorithm) */}
+            {(() => {
+              interface ElementoElevado {
+                key: string;
+                sortY: number;
+                render: () => React.ReactNode;
+              }
 
+              const elementosElevados: ElementoElevado[] = [];
 
+              for (const { tile, pixel } of geometria.puntos) {
+                const clave = claveCoord(tile);
+                const descubierta = descubiertas.has(clave);
+                const revelada = DEBUG_SIN_FOG || descubierta;
+                if (!revelada) continue;
 
-            {geometria.puntos
-              .filter(
-                ({ tile }) =>
-                  (DEBUG_SIN_FOG || descubiertas.has(claveCoord(tile))) &&
+                const esPuenteTile = tile.tipo === 'rio' && puentesConstruidos.has(clave);
+                if (tile.tipo === 'rio' && !esPuenteTile) continue;
+
+                const textura = esPuenteTile
+                  ? texturaPuenteOrientado(tile, tilesPorClave)
+                  : (mapaTexturas.get(clave) ?? null);
+
+                if (textura && textura !== TEXTURA_ARENA) {
+                  const animActiva = animacionesAccion.find(
+                    (a) => a.tileX === tile.x && a.tileY === tile.y && Date.now() - a.inicioMs < a.duracionMs
+                  );
+                  let opacidadExtra = 1;
+
+                  if (animActiva) {
+                    const t = (Date.now() - animActiva.inicioMs) / animActiva.duracionMs;
+                    if (t > 0.35) {
+                      opacidadExtra = Math.max(0, 1 - (t - 0.35) / 0.65);
+                    }
+                  }
+
+                  elementosElevados.push({
+                    key: `textura-${clave}`,
+                    sortY: pixel.y,
+                    render: () => (
+                      <G
+                        key={`textura-${clave}`}
+                        transform={`translate(${pixel.x},${pixel.y}) ${textura.transform ?? ''}`}
+                        opacity={opacidadExtra}
+                      >
+                        <ImagenSvg
+                          href={resolverFuenteImagen(textura.fuente)}
+                          x={-(textura.ancho ?? ANCHO_TILE) / 2}
+                          y={textura.centrado ? -textura.alto / 2 : -ALTO_TILE / 2}
+                          width={textura.ancho ?? ANCHO_TILE}
+                          height={textura.alto}
+                          preserveAspectRatio="xMidYMid meet"
+                        />
+                      </G>
+                    ),
+                  });
+                }
+
+                if (
                   tile.recurso &&
-                  !recursosRecolectados.has(claveCoord(tile)) &&
-                  // 'arbol', piedra, lana y madera ya tienen su propia
-                  // textura de tile completo (dead-tree/mining-rock/sheep)
-                  // — el ícono encima sería redundante. Este bloque queda
-                  // como fallback genérico para el día que se agregue un
-                  // material nuevo sin arte propia todavía.
+                  !recursosRecolectados.has(clave) &&
                   tile.tipo !== 'arbol' &&
                   tile.recurso !== 'piedra' &&
                   tile.recurso !== 'lana' &&
                   tile.recurso !== 'madera'
-              )
-              .map(({ tile, pixel }) => {
-                const icono = ICONOS_RECURSO[tile.recurso!] ?? ICONOS_RECURSO.madera;
-                return (
-                  <IconoMapa
-                    key={`recurso-${claveCoord(tile)}`}
-                    segmentos={icono.segmentos}
-                    x={pixel.x}
-                    y={pixel.y}
-                    color={icono.color}
-                  />
-                );
-              })}
+                ) {
+                  const icono = ICONOS_RECURSO[tile.recurso] ?? ICONOS_RECURSO.madera;
+                  elementosElevados.push({
+                    key: `recurso-${clave}`,
+                    sortY: pixel.y,
+                    render: () => (
+                      <IconoMapa
+                        key={`recurso-${clave}`}
+                        segmentos={icono.segmentos}
+                        x={pixel.x}
+                        y={pixel.y}
+                        color={icono.color}
+                      />
+                    ),
+                  });
+                }
+              }
 
-
-
-            {(() => {
               const pixelJugador = isoAPixel(posicionVisual, ANCHO_TILE, ALTO_TILE);
+              elementosElevados.push({
+                key: 'jugador-sprite',
+                sortY: pixelJugador.y + 0.1,
+                render: () => (
+                  <ImagenSvg
+                    key="jugador-sprite"
+                    href={resolverFuenteImagen(SPRITE_JUGADOR)}
+                    x={pixelJugador.x - SPRITE_ANCHO / 2}
+                    y={pixelJugador.y - SPRITE_ALTO}
+                    width={SPRITE_ANCHO}
+                    height={SPRITE_ALTO}
+                    preserveAspectRatio="xMidYMid meet"
+                  />
+                ),
+              });
 
-              return (
-                <ImagenSvg
-                  href={resolverFuenteImagen(SPRITE_JUGADOR)}
-                  x={pixelJugador.x - SPRITE_ANCHO / 2}
-                  y={pixelJugador.y - SPRITE_ALTO}
-                  width={SPRITE_ANCHO}
-                  height={SPRITE_ALTO}
-                  preserveAspectRatio="xMidYMid meet"
-                />
-              );
+              elementosElevados.sort((a, b) => a.sortY - b.sortY);
+
+              return elementosElevados.map((el) => el.render());
             })()}
 
             {animacionesAccion.map((anim) => {
@@ -2962,44 +2964,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
               );
             })}
 
-            {notificacionesFlotantes.map((notif) => {
-              const transcurrido = Date.now() - notif.inicioMs;
-              if (transcurrido > 1200) return null;
-              const progreso = transcurrido / 1200;
-              const offsetY = -progreso * 45;
-              const opacidad = 1 - Math.pow(progreso, 2);
 
-              return (
-                <G key={notif.id} transform={`translate(${notif.x},${notif.y + offsetY})`} opacity={opacidad}>
-                  {/* Borde exterior blanco de las letras */}
-                  <TextoSvg
-                    x={0}
-                    y={0}
-                    fill="none"
-                    stroke="#FFFFFF"
-                    strokeWidth={4.5}
-                    strokeLinejoin="round"
-                    strokeLinecap="round"
-                    fontSize={15}
-                    fontWeight="bold"
-                    textAnchor="middle"
-                  >
-                    {notif.texto}
-                  </TextoSvg>
-                  {/* Texto interior con el color de recurso */}
-                  <TextoSvg
-                    x={0}
-                    y={0}
-                    fill={notif.color}
-                    fontSize={15}
-                    fontWeight="bold"
-                    textAnchor="middle"
-                  >
-                    {notif.texto}
-                  </TextoSvg>
-                </G>
-              );
-            })}
 
             {modalCuerdaVisible && tileActual
               ? opcionesCuerda.map((opcion) => {
@@ -3126,6 +3091,59 @@ export default function PantallaJuego({ session }: { session: Session }) {
       )}
 
 
+
+      {/* Capa unificada de notificaciones flotantes por encima de toda la UI y modales (zIndex 999999) */}
+      <View
+        pointerEvents="none"
+        style={[
+          StyleSheet.absoluteFill,
+          ({
+            zIndex: 999999,
+            position: Platform.OS === 'web' ? ('fixed' as any) : 'absolute',
+          } as any),
+        ]}
+      >
+        <Svg width="100%" height="100%" viewBox={geometria.viewBox} preserveAspectRatio="xMidYMid slice">
+          {notificacionesFlotantes.map((notif) => {
+            const transcurrido = Date.now() - notif.inicioMs;
+            if (transcurrido > 1200) return null;
+            const progreso = transcurrido / 1200;
+            const offsetY = -progreso * 45;
+            const opacidad = 1 - Math.pow(progreso, 2);
+
+            return (
+              <G key={notif.id} transform={`translate(${notif.x},${notif.y + offsetY})`} opacity={opacidad}>
+                {/* Borde exterior blanco de las letras */}
+                <TextoSvg
+                  x={0}
+                  y={0}
+                  fill="none"
+                  stroke="#FFFFFF"
+                  strokeWidth={4.5}
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                  fontSize={15}
+                  fontWeight="bold"
+                  textAnchor="middle"
+                >
+                  {notif.texto}
+                </TextoSvg>
+                {/* Texto interior con el color de recurso */}
+                <TextoSvg
+                  x={0}
+                  y={0}
+                  fill={notif.color}
+                  fontSize={15}
+                  fontWeight="bold"
+                  textAnchor="middle"
+                >
+                  {notif.texto}
+                </TextoSvg>
+              </G>
+            );
+          })}
+        </Svg>
+      </View>
 
       <Text style={styles.ayuda}>Toca una casilla ya descubierta para caminar hasta ahí. Arrastra para mirar el mapa.</Text>
     </View>

@@ -2607,13 +2607,12 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const herramientaFaltante =
     tileActual?.recurso && !recursoHabilitado ? herramientaParaRecurso(catalogoObjetos, tileActual.recurso) : undefined;
 
-  // "Construir puente" aparece con solo estar junto a CUALQUIER río sin
-  // puente (sin importar ancho, banco de trabajo o madera) — el resto de
-  // las condiciones las valida y explica construirPuente() al tocarlo, en
-  // vez de que el botón directamente no aparezca.
-  const vecinoRioParaPuente =
-    !caminando && tileActual ? buscarVecinoRioSinPuente(tileActual, tilesPorClave, puentesConstruidos) : undefined;
-  const mostrarBotonPuente = !!vecinoRioParaPuente;
+  const cantidadMadera = cantidadDeObjeto(inventario, catalogoObjetos, 'Madera');
+  const vecinoRioValidoParaPuente =
+    !caminando && tileActual && tieneBancoDeTrabajo && cantidadMadera >= COSTO_PUENTE_MADERA
+      ? buscarVecinoRioParaPuente(tileActual, tilesPorClave, puentesConstruidos)
+      : undefined;
+  const mostrarBotonPuente = !!vecinoRioValidoParaPuente;
 
   // "Colocar cuerda" aparece con solo estar al lado o encima de CUALQUIER
   // montaña — el resto de las condiciones (casilla vacía para bajar, cuerda

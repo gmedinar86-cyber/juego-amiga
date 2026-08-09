@@ -235,6 +235,10 @@ const TEXTURA_ROCA_CLASE = conBaseEnVertice(
   crearTexturaEscalada(require('../assets/entorno/piedra arquero.png'), 1024, 1536, 0.75)
 );
 
+const TEXTURA_ROCA_CLASE_APAGADA = conBaseEnVertice(
+  crearTexturaEscalada(require('../assets/entorno/piedra apagada.png'), 1024, 1536, 0.75)
+);
+
 const TEXTURA_FUENTE_VIDA = conBaseEnVertice(
   crearTexturaEscalada(require('../assets/entorno/fuente de vida.png'), 1024, 1536, 0.70)
 );
@@ -1038,6 +1042,11 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const [opcionesCuerda, setOpcionesCuerda] = useState<CuerdaConstruida[]>([]);
   const [modalAvisoInfo, setModalAvisoInfo] = useState<{ titulo: string; mensaje: string } | null>(null);
 
+  const [claseJugador, setClaseJugador] = useState<'maga' | 'arquero'>('maga');
+  const [rocaClaseAgotada, setRocaClaseAgotada] = useState(false);
+  const [modalConfirmarCambioVisible, setModalConfirmarCambioVisible] = useState(false);
+  const [animacionTorbellinoMs, setAnimacionTorbellinoMs] = useState<number | null>(null);
+
   const [faseOndaRio, setFaseOndaRio] = useState(0);
 
   useEffect(() => {
@@ -1077,7 +1086,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const [animacionesAccion, setAnimacionesAccion] = useState<
     {
       id: string;
-      tipo: 'talar' | 'picar' | 'esquilar' | 'abrir_cofre' | 'sanar';
+      tipo: 'talar' | 'picar' | 'esquilar' | 'abrir_cofre' | 'sanar' | 'torbellino';
       tileX: number;
       tileY: number;
       pixelOrigen: Coord;
@@ -1466,7 +1475,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
     }
 
     const enMontana = tileDestino?.tipo === 'montana';
-    const radio = enMontana ? RADIO_VISION_MONTANA : RADIO_VISION_DEFAULT;
+    const radio = enMontana ? RADIO_VISION_MONTANA : (claseJugador === 'arquero' ? 2 : RADIO_VISION_DEFAULT);
     // El predicado por defecto de fusionarDescubiertas (transitabilidad de
     // suelo) excluye 'montana' — si se usara acá, el BFS de revelado ni
     // siquiera podría expandirse desde el propio tile donde está parado el
@@ -2232,7 +2241,25 @@ export default function PantallaJuego({ session }: { session: Session }) {
         setError(errHacha.message);
         return;
       }
-      inventarioNuevo = [hachaInicial];
+      inventarioNuevo.push(hachaInicial);
+    }
+
+    const cuerdaObj = Array.from(catalogoObjetos.values()).find((o) => o.nombre === 'Cuerda');
+    if (cuerdaObj) {
+      const { data: cuerdasIniciales, error: errCuerdas } = await supabase
+        .from('inventario_jugador')
+        .insert([
+          { usuario_id: session.user.id, objeto_id: cuerdaObj.id, usos_restantes: null },
+          { usuario_id: session.user.id, objeto_id: cuerdaObj.id, usos_restantes: null },
+        ])
+        .select();
+      if (errCuerdas) {
+        setError(errCuerdas.message);
+        return;
+      }
+      if (cuerdasIniciales) {
+        inventarioNuevo.push(...cuerdasIniciales);
+      }
     }
     setInventario(inventarioNuevo);
 
@@ -2248,6 +2275,8 @@ export default function PantallaJuego({ session }: { session: Session }) {
       .eq('id', progreso.id);
     if (errProgreso) setError(errProgreso.message);
 
+    setClaseJugador('maga');
+    setRocaClaseAgotada(false);
     setCofresAbiertos(new Map());
     setRecursosRecolectados(new Map());
     setPuentesConstruidos(new Map());
@@ -2431,7 +2460,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
       const esPuenteTile = tile.tipo === 'rio' && puentesConstruidos.has(clave);
       const cuerdaEnEsteMontana =
         tile.tipo === 'montana' ? cuerdasConstruidas.find((c) => coordsIguales(c.montana, tile)) : undefined;
-      const tex = esPuenteTile
+      let tex = esPuenteTile
         ? texturaPuenteOrientado(tile, tilesPorClave)
         : texturaParaTile(
 
@@ -2441,10 +2470,13 @@ export default function PantallaJuego({ session }: { session: Session }) {
             cofresAbiertos.has(clave),
             cuerdaEnEsteMontana
           );
+      if (tile.tipo === 'roca_clase' && rocaClaseAgotada) {
+        tex = TEXTURA_ROCA_CLASE_APAGADA;
+      }
       mapa.set(clave, tex);
     }
     return mapa;
-  }, [bioma, tilesPorClave, recursosRecolectados, cofresAbiertos, puentesConstruidos, cuerdasConstruidas]);
+  }, [bioma, tilesPorClave, recursosRecolectados, cofresAbiertos, puentesConstruidos, cuerdasConstruidas, rocaClaseAgotada]);
 
   const tileRevelado = (t: TileBioma) => DEBUG_SIN_FOG || descubiertas.has(claveCoord(t));
   const juntasRioVisibles = useMemo(() => rioGeometria.juntas.filter((j) => tileRevelado(j.tile)), [rioGeometria, descubiertas]);
@@ -2561,6 +2593,62 @@ export default function PantallaJuego({ session }: { session: Session }) {
     if (errUpdate) setError(errUpdate.message);
 
     agregarNotificacionFlotante('✨ Vida restaurada al máximo', '#10B981');
+  }
+
+  const esRocaClase = tileActual?.tipo === 'roca_clase';
+  const mostrarBotonCambiarPersonaje =
+    !caminando && !!tileActual && esRocaClase && !rocaClaseAgotada && !animacionTorbellinoMs;
+
+  function confirmarCambioPersonaje() {
+    setModalConfirmarCambioVisible(false);
+    if (!tileActual) return;
+
+    const posPixel = isoAPixel({ x: tileActual.x, y: tileActual.y }, ANCHO_TILE, ALTO_TILE);
+    setAnimacionTorbellinoMs(Date.now());
+
+    setAnimacionesAccion((actual) => [
+      ...actual,
+      {
+        id: Math.random().toString(36).substring(2, 9),
+        tipo: 'torbellino',
+        tileX: tileActual.x,
+        tileY: tileActual.y,
+        pixelOrigen: posPixel,
+        pixelDestino: posPixel,
+        inicioMs: Date.now(),
+        duracionMs: 3000,
+      },
+    ]);
+
+    setTimeout(() => {
+      setClaseJugador('arquero');
+      setRocaClaseAgotada(true);
+
+      if (progresoRef.current) {
+        const centro = { x: progresoRef.current.posicion_q, y: progresoRef.current.posicion_r };
+        const reveladasNuevas = fusionarDescubiertas(
+          descubiertasRef.current,
+          centro,
+          tilesPorClave,
+          2,
+          crearEsTransitableJugador(puentesConstruidos)
+        );
+        descubiertasRef.current = reveladasNuevas;
+        setDescubiertas(new Map(reveladasNuevas));
+
+        if (descubrimientoId) {
+          supabase
+            .from('descubrimiento_jugador')
+            .update({ casillas_descubiertas: Array.from(reveladasNuevas.values()) })
+            .eq('id', descubrimientoId);
+        }
+      }
+    }, 1000);
+
+    setTimeout(() => {
+      setAnimacionTorbellinoMs(null);
+      agregarNotificacionFlotante('🏹 ¡Has cambiado a Arquero!', '#10B981');
+    }, 3000);
   }
 
   const mostrarBotonSanar = !caminando && !!tileActual && esTileFuenteVida;
@@ -2932,7 +3020,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
                 if (textura && textura !== TEXTURA_ARENA) {
                   const animActiva = animacionesAccion.find(
-                    (a) => a.tipo !== 'sanar' && a.tileX === tile.x && a.tileY === tile.y && Date.now() - a.inicioMs < a.duracionMs
+                    (a) => a.tipo !== 'sanar' && a.tipo !== 'torbellino' && a.tileX === tile.x && a.tileY === tile.y && Date.now() - a.inicioMs < a.duracionMs
                   );
                   let opacidadExtra = 1;
 
@@ -2990,18 +3078,31 @@ export default function PantallaJuego({ session }: { session: Session }) {
                 }
               }
 
-              const pixelJugador = isoAPixel(posicionVisual, ANCHO_TILE, ALTO_TILE);
+              const pixelJugadorBase = isoAPixel(posicionVisual, ANCHO_TILE, ALTO_TILE);
+              const tileVisualJugador = tilesPorClave.get(
+                claveCoord({ x: Math.round(posicionVisual.x), y: Math.round(posicionVisual.y) })
+              );
+              const estaEnMontana = tileVisualJugador?.tipo === 'montana';
+              const pixelJugadorY = pixelJugadorBase.y + (estaEnMontana ? -28 : 0);
+
+              const spriteJugadorActual = claseJugador === 'arquero'
+                ? require('../assets/personajes/arquero.png')
+                : require('../assets/personajes/maga-fuego-sprite.png');
+              const aspectoJugador = claseJugador === 'arquero' ? (1024 / 1536) : (628 / 1289);
+              const spriteAlto = ALTO_TILE * 1.1;
+              const spriteAncho = spriteAlto * aspectoJugador;
+
               elementosElevados.push({
                 key: 'jugador-sprite',
-                sortY: pixelJugador.y + 0.1,
+                sortY: pixelJugadorBase.y + 0.1,
                 render: () => (
                   <ImagenSvg
                     key="jugador-sprite"
-                    href={resolverFuenteImagen(SPRITE_JUGADOR)}
-                    x={pixelJugador.x - SPRITE_ANCHO / 2}
-                    y={pixelJugador.y - SPRITE_ALTO}
-                    width={SPRITE_ANCHO}
-                    height={SPRITE_ALTO}
+                    href={resolverFuenteImagen(spriteJugadorActual)}
+                    x={pixelJugadorBase.x - spriteAncho / 2}
+                    y={pixelJugadorY - spriteAlto}
+                    width={spriteAncho}
+                    height={spriteAlto}
                     preserveAspectRatio="xMidYMid meet"
                   />
                 ),
@@ -3024,7 +3125,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
               return (
                 <G key={`tool-${anim.id}`}>
                   {/* Herramienta blandiéndose en la mano del personaje (si aplica) */}
-                  {anim.tipo !== 'sanar' && (
+                  {anim.tipo !== 'sanar' && anim.tipo !== 'torbellino' && (
                     <G
                       transform={`translate(${anim.pixelOrigen.x + 12}, ${anim.pixelOrigen.y - 28}) rotate(${swingAngle}, 0, 0)`}
                     >
@@ -3088,6 +3189,73 @@ export default function PantallaJuego({ session }: { session: Session }) {
                       />
                     </G>
                   )}
+
+                  {anim.tipo === 'torbellino' && (() => {
+                    const opacidadTornado = t < 0.2 ? (t / 0.2) : (t > 0.8 ? ((1 - t) / 0.2) : 1);
+                    const rotacionBase = t * 2160;
+
+                    return (
+                      <G transform={`translate(${sparkX}, ${sparkY + 15})`} opacity={opacidadTornado}>
+                        {/* 1. Sombra / Aura de impacto en el suelo */}
+                        <Ellipse cx={0} cy={20} rx={50} ry={25} fill="#0F172A" opacity={0.8} />
+
+                        {/* 2. Columna/Embudo sólido opaco del Tornado (Cuerpo principal 100% opaco que oculta al personaje y a la piedra) */}
+                        <Path
+                          d="M -20 20 Q -45 -35 -75 -120 L 75 -120 Q 45 -35 20 20 Z"
+                          fill="#0F172A"
+                        />
+                        <Path
+                          d="M -16 20 Q -38 -30 -65 -110 L 65 -110 Q 38 -30 16 20 Z"
+                          fill="#1E293B"
+                        />
+                        <Path
+                          d="M -12 20 Q -32 -25 -55 -100 L 55 -100 Q 32 -25 12 20 Z"
+                          fill="#047857"
+                        />
+                        <Path
+                          d="M -8 20 Q -24 -20 -42 -90 L 42 -90 Q 24 -20 8 20 Z"
+                          fill="#059669"
+                        />
+
+                        {/* 3. Anillos y espirales de aire demoledor girando rápidamente */}
+                        {[-100, -80, -60, -40, -20, 0, 15].map((hY, idx) => {
+                          const anchoBase = 65 - hY * 0.45;
+                          const shiftX = Math.sin((rotacionBase + idx * 45) * (Math.PI / 180)) * 14;
+                          return (
+                            <G key={`tornado-ring-${idx}`} transform={`translate(${shiftX}, ${hY})`}>
+                              <Ellipse
+                                cx={0}
+                                cy={0}
+                                rx={anchoBase}
+                                ry={anchoBase * 0.35}
+                                fill={idx % 2 === 0 ? '#34D399' : '#10B981'}
+                                opacity={0.95}
+                              />
+                              <Path
+                                d={`M ${-anchoBase} 0 Q 0 ${-anchoBase * 0.4} ${anchoBase} 0 Q 0 ${anchoBase * 0.4} ${-anchoBase} 0`}
+                                fill="#ECFDF5"
+                                opacity={0.85}
+                              />
+                            </G>
+                          );
+                        })}
+
+                        {/* 4. Ráfagas y escombros/chispas de aire cortante en vórtice */}
+                        {[0, 72, 144, 216, 288].map((angle, idx) => {
+                          const rad = (rotacionBase + angle) * (Math.PI / 180);
+                          const dist = 35 + Math.sin(t * 20 + idx) * 20;
+                          const px = Math.cos(rad) * dist;
+                          const py = -60 + Math.sin(rad) * (dist * 0.5);
+                          return (
+                            <G key={`debris-${idx}`} transform={`translate(${px}, ${py})`}>
+                              <Circle cx={0} cy={0} r={4 + (idx % 3)} fill={idx % 2 === 0 ? '#FACC15' : '#6EE7B7'} />
+                              <Path d="M -4 -4 L 4 4 M 4 -4 L -4 4" stroke="#FFFFFF" strokeWidth={2} />
+                            </G>
+                          );
+                        })}
+                      </G>
+                    );
+                  })()}
                 </G>
               );
             })}
@@ -3211,6 +3379,12 @@ export default function PantallaJuego({ session }: { session: Session }) {
             </TouchableOpacity>
           )}
 
+          {mostrarBotonCambiarPersonaje && (
+            <TouchableOpacity style={styles.boton} onPress={() => setModalConfirmarCambioVisible(true)}>
+              <Text style={styles.botonTexto}>Cambiar personaje</Text>
+            </TouchableOpacity>
+          )}
+
           {mostrarBotonSubir && (
             <TouchableOpacity style={styles.boton} onPress={subirMontana}>
               <Text style={styles.botonTexto}>Subir montaña</Text>
@@ -3223,6 +3397,33 @@ export default function PantallaJuego({ session }: { session: Session }) {
           )}
         </View>
       )}
+
+      {/* Modal Confirmación Cambio de Personaje */}
+      <Modal visible={modalConfirmarCambioVisible} transparent animationType="fade" onRequestClose={() => setModalConfirmarCambioVisible(false)}>
+        <View style={styles.modalFondo}>
+          <View style={[styles.modalContenido, { maxWidth: 360 }]}>
+            <Text style={styles.modalTitulo}>Cambiar personaje</Text>
+            <Text style={{ color: '#E2E8F0', fontSize: 14, lineHeight: 20, marginBottom: 18, textAlign: 'center' }}>
+              ¿Estás seguro que quieres cambiar? este cambio es permanente hasta que no superes el desierto.
+            </Text>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12 }}>
+              <TouchableOpacity
+                style={[styles.boton, { flex: 1, marginTop: 0, backgroundColor: '#475569' }]}
+                onPress={() => setModalConfirmarCambioVisible(false)}
+              >
+                <Text style={styles.botonTexto}>Cancelar</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.boton, { flex: 1, marginTop: 0, backgroundColor: '#10B981' }]}
+                onPress={confirmarCambioPersonaje}
+              >
+                <Text style={styles.botonTexto}>Aceptar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
 
 

@@ -73,7 +73,6 @@ export function herramientaParaRecurso(catalogo: Map<string, Objeto>, recurso: s
 const TOPES_INVENTARIO: Record<string, number> = {
   Piedra: 5,
   Madera: 15,
-  Lana: 10,
   'Trozo de cuerda': 10,
   Pico: 2,
   Hacha: 2,
@@ -86,7 +85,12 @@ export function topeInventario(nombreObjeto: string): number | null {
 
 // Cuántas instancias de un objeto (por nombre) tiene ya el jugador.
 export function cantidadDeObjeto(inventario: InventarioItem[], catalogo: Map<string, Objeto>, nombreObjeto: string): number {
-  return inventario.filter((item) => catalogo.get(item.objeto_id)?.nombre === nombreObjeto).length;
+  return inventario.filter((item) => {
+    const obj = catalogo.get(item.objeto_id);
+    if (!obj) return false;
+    const nom = (obj.nombre === 'Lana' || obj.nombre === 'lana') ? 'Trozo de cuerda' : obj.nombre;
+    return nom === nombreObjeto;
+  }).length;
 }
 
 // true si agregar `cantidadNueva` unidades de `nombreObjeto` no pisa el tope

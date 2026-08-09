@@ -1309,7 +1309,12 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
       const { data: objetosData, error: errObjetos } = await supabase.from('objetos').select('*');
       if (errObjetos) throw errObjetos;
-      const catalogo = new Map<string, Objeto>((objetosData ?? []).map((o) => [o.id, o as Objeto]));
+      const catalogo = new Map<string, Objeto>(
+        (objetosData ?? []).map((o) => [
+          o.id,
+          o.nombre.toLowerCase() === 'lana' ? { ...(o as Objeto), nombre: 'Trozo de cuerda' } : (o as Objeto),
+        ])
+      );
 
       const { data: inventarioData, error: errInventario } = await supabase
         .from('inventario_jugador')
@@ -1634,10 +1639,12 @@ export default function PantallaJuego({ session }: { session: Session }) {
     for (const item of inventario) {
       const objeto = catalogoObjetos.get(item.objeto_id);
       if (!objeto) continue;
+      const nomRaw = objeto.nombre;
+      const nom = (nomRaw === 'Lana' || nomRaw === 'lana') ? 'Trozo de cuerda' : nomRaw;
       if (item.usos_restantes !== null && item.usos_restantes !== undefined) {
-        conDurabilidad.push({ id: item.id, nombre: objeto.nombre, usosRestantes: item.usos_restantes });
+        conDurabilidad.push({ id: item.id, nombre: nom, usosRestantes: item.usos_restantes });
       } else {
-        conteoSimple.set(objeto.nombre, (conteoSimple.get(objeto.nombre) ?? 0) + 1);
+        conteoSimple.set(nom, (conteoSimple.get(nom) ?? 0) + 1);
       }
     }
     const filas: FilaInventario[] = Array.from(conteoSimple.entries()).map(([nombre, cantidad]) => ({
@@ -1893,8 +1900,16 @@ export default function PantallaJuego({ session }: { session: Session }) {
     }
 
     setInventario((actual) => [...actual.filter((item) => !idsABorrar.includes(item.id)), data]);
-    mostrarMensaje(`Crafteaste ${nombreObjeto}`);
-    agregarNotificacionFlotante(`✨ Crafteaste ${nombreObjeto}`, '#10B981');
+    const textoCreado =
+      nombreObjeto === 'Cuerda'
+        ? 'Has creado una cuerda'
+        : nombreObjeto === 'Hacha'
+        ? 'Has creado un hacha'
+        : nombreObjeto === 'Pico'
+        ? 'Has creado un pico'
+        : `Has creado ${nombreObjeto.toLowerCase()}`;
+    mostrarMensaje(textoCreado);
+    agregarNotificacionFlotante(textoCreado, '#10B981');
   }
 
   // Valida cada condición por separado y explica con un mensaje cuál falta
@@ -2956,13 +2971,27 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
               return (
                 <G key={notif.id} transform={`translate(${notif.x},${notif.y + offsetY})`} opacity={opacidad}>
+                  {/* Borde exterior blanco de las letras */}
+                  <TextoSvg
+                    x={0}
+                    y={0}
+                    fill="none"
+                    stroke="#FFFFFF"
+                    strokeWidth={4.5}
+                    strokeLinejoin="round"
+                    strokeLinecap="round"
+                    fontSize={15}
+                    fontWeight="bold"
+                    textAnchor="middle"
+                  >
+                    {notif.texto}
+                  </TextoSvg>
+                  {/* Texto interior con el color de recurso */}
                   <TextoSvg
                     x={0}
                     y={0}
                     fill={notif.color}
-                    stroke="#0F172A"
-                    strokeWidth={1.5}
-                    fontSize={14}
+                    fontSize={15}
                     fontWeight="bold"
                     textAnchor="middle"
                   >

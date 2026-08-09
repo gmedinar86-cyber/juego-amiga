@@ -851,8 +851,20 @@ function texturaPuenteOrientado(tile: TileBioma, tilesPorClave: Map<string, Tile
   return TEXTURA_PUENTE_NORMAL;
 }
 
+function esRioConArenaEnAmbosLados(tile: TileBioma, tilesPorClave: Map<string, TileBioma>): boolean {
+  const tNW = tilesPorClave.get(claveCoord({ x: tile.x - 1, y: tile.y }));
+  const tSE = tilesPorClave.get(claveCoord({ x: tile.x + 1, y: tile.y }));
+  const ejeNW_SE = tNW?.tipo === 'arena' && tSE?.tipo === 'arena';
+
+  const tNE = tilesPorClave.get(claveCoord({ x: tile.x, y: tile.y - 1 }));
+  const tSW = tilesPorClave.get(claveCoord({ x: tile.x, y: tile.y + 1 }));
+  const ejeNE_SW = tNE?.tipo === 'arena' && tSW?.tipo === 'arena';
+
+  return ejeNW_SE || ejeNE_SW;
+}
+
 // Igual que buscarVecinoRioSinPuente, pero solo devuelve un candidato válido
-// para construir puente ahí (además angosto). Se usa al construir de verdad.
+// para construir puente ahí (angosto y con arena pura a ambos lados).
 function buscarVecinoRioParaPuente(
   origen: Coord,
   tilesPorClave: Map<string, TileBioma>,
@@ -860,7 +872,12 @@ function buscarVecinoRioParaPuente(
 ): TileBioma | undefined {
   for (const d of Object.values(BORDE_DELTA)) {
     const vecino = tilesPorClave.get(claveCoord({ x: origen.x + d.x, y: origen.y + d.y }));
-    if (vecino?.tipo === 'rio' && !puentes.has(claveCoord(vecino)) && esRioDeUnaCasilla(vecino, tilesPorClave)) {
+    if (
+      vecino?.tipo === 'rio' &&
+      !puentes.has(claveCoord(vecino)) &&
+      esRioDeUnaCasilla(vecino, tilesPorClave) &&
+      esRioConArenaEnAmbosLados(vecino, tilesPorClave)
+    ) {
       return vecino;
     }
   }
@@ -910,14 +927,13 @@ function buscarTodasLasOpcionesCuerda(
 ): CuerdaConstruida[] {
   const opciones: CuerdaConstruida[] = [];
   if (origen.tipo === 'montana') {
+    const montanaTieneCuerda = cuerdasExistentes.some((c) => coordsIguales(c.montana, origen));
+    if (montanaTieneCuerda) return [];
+
     for (const v of vecinos(origen)) {
       const vecino = tilesPorClave.get(claveCoord(v));
       if (vecino && esArenaVaciaParaCuerda(vecino)) {
-        const par: CuerdaConstruida = { suelo: vecino, montana: origen };
-        const yaExiste = cuerdasExistentes.some(
-          (c) => coordsIguales(c.suelo, par.suelo) && coordsIguales(c.montana, par.montana)
-        );
-        if (!yaExiste) opciones.push(par);
+        opciones.push({ suelo: vecino, montana: origen });
       }
     }
   } else {
@@ -925,10 +941,10 @@ function buscarTodasLasOpcionesCuerda(
       const vecino = tilesPorClave.get(claveCoord(v));
       if (vecino?.tipo === 'montana') {
         const par: CuerdaConstruida = { suelo: origen, montana: vecino };
-        const yaExiste = cuerdasExistentes.some(
-          (c) => coordsIguales(c.suelo, par.suelo) && coordsIguales(c.montana, par.montana)
-        );
-        if (!yaExiste) opciones.push(par);
+        const montanaTieneCuerda = cuerdasExistentes.some((c) => coordsIguales(c.montana, vecino));
+        if (!montanaTieneCuerda) {
+          opciones.push(par);
+        }
       }
     }
   }
@@ -1769,17 +1785,35 @@ export default function PantallaJuego({ session }: { session: Session }) {
   }, [inventario, catalogoObjetos]);
 
   async function abrirCofre() {
-    if (!progreso || !descubrimientoId || !tileActual?.cofre) return;
+    if (!progreso || !descubrimientoId || !tileActual) return;
     const clave = claveCoord({ x: progreso.posicion_q, y: progreso.posicion_r });
-    if (cofresAbiertos.has(clave)) return;
+    if (cofresAbiertos.has(clave) || cofresAbiertosRef.current.has(clave)) return;
 
-    const { objetoId, cantidad } = tileActual.cofre;
+    const cofre = tileActual.cofre;
+    if (!cofre) return;
+
+    // Marcar INMEDIATAMENTE en estado local para bloquear cualquier tap repetido
+    const nuevosAbiertos = new Map(cofresAbiertosRef.current);
+    nuevosAbiertos.set(clave, { x: progreso.posicion_q, y: progreso.posicion_r });
+    cofresAbiertosRef.current = nuevosAbiertos;
+    setCofresAbiertos(nuevosAbiertos);
+
+    const objetoId = cofre.objetoId;
+    const cantidad = cofre.cantidad;
     const objeto = catalogoObjetos.get(objetoId);
-    if (objeto && !hayEspacioPara(inventario, catalogoObjetos, objeto.nombre, cantidad)) {
+
+    const tope = topeInventario(objeto?.nombre ?? '');
+    const posees = cantidadDeObjeto(inventario, catalogoObjetos, objeto?.nombre ?? '');
+    if (tope !== null && posees + cantidad > tope) {
       mostrarAvisoModal(
-        '⚠️ Inventario Lleno',
-        `No tienes espacio libre en el inventario para recolectar ${objeto.nombre}. Libera espacio antes de abrir el cofre.`
+        '⚠️ Límite del Inventario Alcanzado',
+        `No puedes llevar más de ${tope} unidades de ${objeto?.nombre ?? 'este objeto'} en tu inventario. Activa o usa los que ya posees para poder abrir más cofres.`
       );
+      // Revertir en caso de aviso por inventario lleno
+      const revertidos = new Map(cofresAbiertosRef.current);
+      revertidos.delete(clave);
+      cofresAbiertosRef.current = revertidos;
+      setCofresAbiertos(revertidos);
       return;
     }
 
@@ -1818,15 +1852,12 @@ export default function PantallaJuego({ session }: { session: Session }) {
     ]);
 
     setTimeout(async () => {
-      const nuevosAbiertos = new Map(cofresAbiertosRef.current);
-      nuevosAbiertos.set(clave, { x: progreso.posicion_q, y: progreso.posicion_r });
-      setCofresAbiertos(nuevosAbiertos);
       setInventario((actual) => [...actual, ...(filasInsertadas ?? [])]);
       agregarNotificacionFlotante(`+${cantidad} ${objeto?.nombre ?? 'objeto'}`, '#F4B93F');
 
       const { error: errDesc } = await supabase
         .from('descubrimiento_jugador')
-        .update({ cofres_abiertos: Array.from(nuevosAbiertos.values()) })
+        .update({ cofres_abiertos: Array.from(cofresAbiertosRef.current.values()) })
         .eq('id', descubrimientoId);
       if (errDesc) setError(errDesc.message);
     }, 650);
@@ -1838,7 +1869,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
     if (!habilitados.has(recurso)) return;
 
     const clave = claveCoord({ x: progreso.posicion_q, y: progreso.posicion_r });
-    if (recursosRecolectados.has(clave)) return;
+    if (recursosRecolectados.has(clave) || recursosRecolectadosRef.current.has(clave)) return;
 
     const objeto = objetoParaRecurso(catalogoObjetos, recurso);
     if (!objeto) return;
@@ -1850,6 +1881,12 @@ export default function PantallaJuego({ session }: { session: Session }) {
       );
       return;
     }
+
+    // Marcar INMEDIATAMENTE en estado local para bloquear recolecciones repetidas por multitap rápido
+    const nuevosRecolectados = new Map(recursosRecolectadosRef.current);
+    nuevosRecolectados.set(clave, { x: tileActual.x, y: tileActual.y });
+    recursosRecolectadosRef.current = nuevosRecolectados;
+    setRecursosRecolectados(nuevosRecolectados);
 
     // Herramienta con durabilidad usada para recolectar este recurso (Hacha
     // -> madera, Pico -> piedra), si el recurso tiene una asociada — se
@@ -1891,17 +1928,14 @@ export default function PantallaJuego({ session }: { session: Session }) {
       },
     ]);
 
-    // 2. A los 650ms (cuando termina el golpe de la herramienta y se completa el desvanecimiento), retirar el recurso del mapa y otorgar el objeto
+    // 2. A los 650ms (cuando termina el golpe), otorgar objeto y persistir
     setTimeout(async () => {
-      const nuevos = new Map(recursosRecolectadosRef.current);
-      nuevos.set(clave, { x: tileActual.x, y: tileActual.y });
-      setRecursosRecolectados(nuevos);
       setInventario((actual) => [...actual, data]);
       agregarNotificacionFlotante(`+1 ${objeto.nombre}`, '#38BDF8');
 
       const { error: errDesc } = await supabase
         .from('descubrimiento_jugador')
-        .update({ recursos_recolectados: Array.from(nuevos.values()) })
+        .update({ recursos_recolectados: Array.from(recursosRecolectadosRef.current.values()) })
         .eq('id', descubrimientoId);
       if (errDesc) setError(errDesc.message);
 
@@ -2037,6 +2071,11 @@ export default function PantallaJuego({ session }: { session: Session }) {
           '⚠️ Ubicación no Válida',
           'Para construir un puente debes estar parado justo al lado de una casilla de río.'
         );
+      } else if (!esRioConArenaEnAmbosLados(vecinoCualquiera, tilesPorClave)) {
+        mostrarAvisoModal(
+          '⚠️ Terreno no Válido',
+          'No puedes construir un puente si hay una montaña al otro lado. Solo puede ponerse un puente si hay arena en ambos lados del río.'
+        );
       } else {
         mostrarAvisoModal(
           '⚠️ Tramo de Río Muy Ancho',
@@ -2132,7 +2171,17 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
     const opciones = buscarTodasLasOpcionesCuerda(tileActual, tilesPorClave, cuerdasConstruidas);
     if (opciones.length === 0) {
-      if (tileActual.tipo === 'montana') {
+      const tieneCuerdaYa =
+        tileActual.tipo === 'montana'
+          ? cuerdasConstruidas.some((c) => coordsIguales(c.montana, tileActual))
+          : vecinos(tileActual).some((v) => cuerdasConstruidas.some((c) => coordsIguales(c.montana, v)));
+
+      if (tieneCuerdaYa) {
+        mostrarAvisoModal(
+          '⚠️ Montaña ya tiene Cuerda',
+          'Esta montaña ya tiene una cuerda colocada. No se puede colocar más de una cuerda por montaña.'
+        );
+      } else if (tileActual.tipo === 'montana') {
         mostrarAvisoModal(
           '⚠️ Sin Espacio para Cuerda',
           'No hay ninguna casilla de arena vacía libre al lado para descender la cuerda.'

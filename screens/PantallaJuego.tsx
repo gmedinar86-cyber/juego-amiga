@@ -1100,9 +1100,10 @@ export default function PantallaJuego({ session }: { session: Session }) {
     return () => cancelAnimationFrame(animId);
   }, []);
 
-  function agregarNotificacionFlotante(texto: string, color: string = '#F4B93F') {
+  function agregarNotificacionFlotante(texto: string, color: string = '#F4B93F', posCoord?: Coord) {
     if (!progreso) return;
-    const posPixel = isoAPixel({ x: progreso.posicion_q, y: progreso.posicion_r }, ANCHO_TILE, ALTO_TILE);
+    const coordAncla = posCoord ?? { x: progreso.posicion_q, y: progreso.posicion_r };
+    const posPixel = isoAPixel(coordAncla, ANCHO_TILE, ALTO_TILE);
     const nueva = {
       id: Math.random().toString(36).substring(2, 9),
       texto,
@@ -1460,7 +1461,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
       const casillaAnterior = progresoRef.current
         ? { x: progresoRef.current.posicion_q, y: progresoRef.current.posicion_r }
         : destinoPaso;
-      golpearCactus(casillaAnterior);
+      golpearCactus(casillaAnterior, destinoPaso);
       return;
     }
 
@@ -1563,13 +1564,13 @@ export default function PantallaJuego({ session }: { session: Session }) {
   // anterior en vez de asentarlo ahí — corta cualquier paso encolado (no
   // tiene sentido seguir un camino que pasaba por el cactus) y rebota la
   // animación de vuelta.
-  function golpearCactus(casillaAnterior: Coord) {
+  function golpearCactus(casillaAnterior: Coord, tileCactus?: Coord) {
     colaRef.current = [];
     setGolpeCactus(true);
     if (golpeCactusTimeoutRef.current) clearTimeout(golpeCactusTimeoutRef.current);
     golpeCactusTimeoutRef.current = setTimeout(() => setGolpeCactus(false), GOLPE_CACTUS_MS);
     mostrarMensaje(`-${DANO_CACTUS} vida (cactus)`);
-    agregarNotificacionFlotante(`-${DANO_CACTUS} Vida 🌵`, '#EF4444');
+    agregarNotificacionFlotante(`-${DANO_CACTUS} Vida 🌵`, '#EF4444', tileCactus);
 
     const progresoActual = progresoRef.current;
     let vidaLlegoACero = false;

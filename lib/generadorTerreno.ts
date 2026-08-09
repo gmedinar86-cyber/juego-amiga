@@ -1,9 +1,10 @@
 import { claveCoord, coordsEnRadio, distanciaChebyshev, vecinos, type Coord } from './isoGrid';
 import type { GridBioma, TileBioma } from './tipos';
 
-const TIPOS_NO_TRANSITABLES = new Set(['montana', 'rio']);
+const TIPOS_NO_TRANSITABLES = new Set(['montana', 'rio', 'mercader']);
 
 export function esTransitable(tile: Pick<TileBioma, 'tipo'>): boolean {
+  if ((tile as any).x === 27 && (tile as any).y === 28) return false;
   return !TIPOS_NO_TRANSITABLES.has(tile.tipo);
 }
 

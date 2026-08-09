@@ -5036,13 +5036,13 @@ export const MAPA_DESIERTO_FIJO: GridBioma = {
     {
       "x": 26,
       "y": 28,
-      "tipo": "arena",
+      "tipo": "montana",
       "recurso": null
     },
     {
       "x": 26,
       "y": 29,
-      "tipo": "arena",
+      "tipo": "montana",
       "recurso": null
     },
     {
@@ -5216,7 +5216,7 @@ export const MAPA_DESIERTO_FIJO: GridBioma = {
     {
       "x": 27,
       "y": 28,
-      "tipo": "arena",
+      "tipo": "mercader",
       "recurso": null
     },
     {

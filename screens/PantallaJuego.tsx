@@ -235,6 +235,16 @@ const TEXTURA_ROCA_CLASE = conBaseEnVertice(
   crearTexturaEscalada(require('../assets/entorno/piedra arquero.png'), 1024, 1536, 0.75)
 );
 
+const TEXTURA_FUENTE_VIDA = conBaseEnVertice(
+  crearTexturaEscalada(require('../assets/entorno/fuente de vida.png'), 1024, 1536, 0.70)
+);
+
+const TEXTURA_MERCADER = {
+  ...crearTexturaEscalada(require('../assets/entorno/mercader.png'), 1024, 1536, 0.38),
+  centrado: true,
+  transform: 'translate(-8, -14)',
+};
+
 // Punto "montaña" de una cuerda ya colocada: mismo modelo de roca que
 // TEXTURA_MONTANA pero con la soga tallada, para que se note a simple vista
 // dónde se puede subir/bajar sin agregar un ícono aparte.
@@ -549,6 +559,9 @@ function texturaParaTile(
   cofreAbierto: boolean,
   cuerdaEnEsteMontana?: CuerdaConstruida
 ): Textura | null {
+  if (tile.x === 27 && tile.y === 28) return TEXTURA_MERCADER;
+  if (tile.x === 27 && tile.y === 29) return TEXTURA_FUENTE_VIDA;
+  if (tile.tipo === 'mercader') return TEXTURA_MERCADER;
   switch (tile.tipo) {
     case 'arena':
       // Cofre / piedra / lana / madera ya tienen su propio bloque con arte
@@ -949,6 +962,60 @@ function buscarCuerdaPorMontana(cuerdas: CuerdaConstruida[], coord: Coord): Cuer
   return cuerdas.find((c) => coordsIguales(c.montana, coord));
 }
 
+function BarraVidaHUD({ vidaActual, vidaMaxima }: { vidaActual: number; vidaMaxima: number }) {
+  const proporcion = Math.max(0, Math.min(1, vidaActual / vidaMaxima));
+  const anchoTotal = 220;
+  const altoBarra = anchoTotal * (1024 / 1536); // 146.67px
+
+  const leftMin = anchoTotal * (351 / 1536);
+  const purpleWidth = anchoTotal * ((1426 - 351) / 1536);
+  const topMin = altoBarra * (484 / 1024);
+  const purpleHeight = altoBarra * ((636 - 484) / 1024);
+
+  const mascaraLeft = leftMin + purpleWidth * proporcion;
+  const mascaraAncho = purpleWidth * (1 - proporcion);
+
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: -35, marginBottom: -35 }}>
+      <View style={{ width: anchoTotal, height: altoBarra, position: 'relative' }}>
+        <RNImage
+          source={require('../assets/entorno/barra de vida.png')}
+          style={{ width: anchoTotal, height: altoBarra }}
+          resizeMode="cover"
+        />
+
+        {mascaraAncho > 0 && (
+          <View
+            style={{
+              position: 'absolute',
+              left: mascaraLeft,
+              top: topMin,
+              width: mascaraAncho,
+              height: purpleHeight,
+              backgroundColor: '#120A21',
+              borderRadius: 2,
+            }}
+          />
+        )}
+      </View>
+
+      <Text
+        style={{
+          marginLeft: -10,
+          fontSize: 18,
+          fontWeight: '900',
+          color: '#FFFFFF',
+          textShadowColor: 'rgba(0, 0, 0, 0.9)',
+          textShadowOffset: { width: 1, height: 1 },
+          textShadowRadius: 3,
+        }}
+      >
+        {vidaActual}/{vidaMaxima}
+      </Text>
+    </View>
+  );
+}
+
 export default function PantallaJuego({ session }: { session: Session }) {
   const [progreso, setProgreso] = useState<ProgresoJugador | null>(null);
   const [bioma, setBioma] = useState<Bioma | null>(null);
@@ -1010,7 +1077,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
   const [animacionesAccion, setAnimacionesAccion] = useState<
     {
       id: string;
-      tipo: 'talar' | 'picar' | 'esquilar' | 'abrir_cofre';
+      tipo: 'talar' | 'picar' | 'esquilar' | 'abrir_cofre' | 'sanar';
       tileX: number;
       tileY: number;
       pixelOrigen: Coord;
@@ -2457,9 +2524,50 @@ export default function PantallaJuego({ session }: { session: Session }) {
   // montaña — el resto de las condiciones (casilla vacía para bajar, cuerda
   // duplicada, Cuerda en inventario) las valida y explica colocarCuerda() al
   // tocarlo.
+  const esTileFuenteVida = tileActual?.x === 27 && tileActual?.y === 29;
+
+  async function sanarEnFuente() {
+    if (!progreso || caminando) return;
+
+    if (progreso.vida_actual >= VIDA_MAXIMA) {
+      agregarNotificacionFlotante('No ocurre nada', '#94A3B8');
+      return;
+    }
+
+    const progresoActualizado = { ...progreso, vida_actual: VIDA_MAXIMA };
+    setProgreso(progresoActualizado);
+
+    const posPixel = isoAPixel({ x: 27, y: 29 }, ANCHO_TILE, ALTO_TILE);
+
+    setAnimacionesAccion((actual) => [
+      ...actual,
+      {
+        id: Math.random().toString(36).substring(2, 9),
+        tipo: 'sanar',
+        tileX: 27,
+        tileY: 29,
+        pixelOrigen: posPixel,
+        pixelDestino: posPixel,
+        inicioMs: Date.now(),
+        duracionMs: 1200,
+      },
+    ]);
+
+    const { error: errUpdate } = await supabase
+      .from('progreso_jugador')
+      .update({ vida_actual: VIDA_MAXIMA })
+      .eq('usuario_id', session.user.id);
+    if (errUpdate) setError(errUpdate.message);
+
+    agregarNotificacionFlotante('✨ Vida restaurada al máximo', '#10B981');
+  }
+
+  const mostrarBotonSanar = !caminando && !!tileActual && esTileFuenteVida;
+
   const mostrarBotonColocarCuerda =
     !caminando &&
     !!tileActual &&
+    !esTileFuenteVida &&
     (tileActual.tipo === 'montana' ||
       vecinos(tileActual).some((v) => tilesPorClave.get(claveCoord(v))?.tipo === 'montana'));
 
@@ -2509,12 +2617,14 @@ export default function PantallaJuego({ session }: { session: Session }) {
       ) : (
         <View style={styles.encabezado}>
           <View>
-            <Text style={styles.titulo}>{bioma.nombre}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Text style={styles.titulo}>{bioma.nombre}</Text>
+              <View style={{ marginLeft: 16 }}>
+                <BarraVidaHUD vidaActual={progreso.vida_actual} vidaMaxima={VIDA_MAXIMA} />
+              </View>
+            </View>
             <Text style={styles.subtitulo}>
               Nivel {progreso.nivel} · Fuerza {progreso.fuerza}
-            </Text>
-            <Text style={styles.subtitulo}>
-              Vida: {progreso.vida_actual}/{VIDA_MAXIMA}
             </Text>
           </View>
           <View style={styles.accionesEncabezado}>
@@ -2825,7 +2935,7 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
                 if (textura && textura !== TEXTURA_ARENA) {
                   const animActiva = animacionesAccion.find(
-                    (a) => a.tileX === tile.x && a.tileY === tile.y && Date.now() - a.inicioMs < a.duracionMs
+                    (a) => a.tipo !== 'sanar' && a.tileX === tile.x && a.tileY === tile.y && Date.now() - a.inicioMs < a.duracionMs
                   );
                   let opacidadExtra = 1;
 
@@ -2916,12 +3026,14 @@ export default function PantallaJuego({ session }: { session: Session }) {
 
               return (
                 <G key={`tool-${anim.id}`}>
-                  {/* Herramienta blandiéndose en la mano del personaje */}
-                  <G
-                    transform={`translate(${anim.pixelOrigen.x + 12}, ${anim.pixelOrigen.y - 28}) rotate(${swingAngle}, 0, 0)`}
-                  >
-                    <IconoHerramientaAccion tipo={anim.tipo} />
-                  </G>
+                  {/* Herramienta blandiéndose en la mano del personaje (si aplica) */}
+                  {anim.tipo !== 'sanar' && (
+                    <G
+                      transform={`translate(${anim.pixelOrigen.x + 12}, ${anim.pixelOrigen.y - 28}) rotate(${swingAngle}, 0, 0)`}
+                    >
+                      <IconoHerramientaAccion tipo={anim.tipo} />
+                    </G>
+                  )}
 
                   {/* Partículas de impacto (astillas / chispas / lana) */}
                   {anim.tipo === 'talar' && (
@@ -2957,6 +3069,25 @@ export default function PantallaJuego({ session }: { session: Session }) {
                         strokeWidth={2.5}
                         strokeLinecap="round"
                         opacity={Math.max(0, 1 - t)}
+                      />
+                    </G>
+                  )}
+
+                  {anim.tipo === 'sanar' && (
+                    <G transform={`translate(${sparkX}, ${sparkY - 20})`}>
+                      <Circle cx={-12 + Math.sin(t * 12) * 16} cy={-10 - t * 40} r={4} fill="#10B981" opacity={0.9} />
+                      <Circle cx={12 - Math.cos(t * 10) * 16} cy={-18 - t * 35} r={5} fill="#34D399" opacity={0.85} />
+                      <Circle cx={-4 + Math.sin(t * 15) * 12} cy={-28 - t * 45} r={3.5} fill="#FACC15" opacity={0.9} />
+                      <Circle cx={6 - Math.cos(t * 14) * 14} cy={-36 - t * 50} r={4.5} fill="#6EE7B7" opacity={0.95} />
+                      <Path
+                        d={`M ${-8 + Math.sin(t * 8) * 10} ${-15 - t * 30} l 2 4 l 4 2 l -4 2 l -2 4 l -2 -4 l -4 -2 l 4 -2 z`}
+                        fill="#FACC15"
+                        opacity={Math.max(0, 1 - t * 0.8)}
+                      />
+                      <Path
+                        d={`M ${8 - Math.cos(t * 9) * 10} ${-25 - t * 35} l 2.5 5 l 5 2.5 l -5 2.5 l -2.5 5 l -2.5 -5 l -5 -2.5 l 5 -2.5 z`}
+                        fill="#34D399"
+                        opacity={Math.max(0, 1 - t * 0.8)}
                       />
                     </G>
                   )}
@@ -3041,8 +3172,14 @@ export default function PantallaJuego({ session }: { session: Session }) {
         mostrarBotonPuente ||
         mostrarBotonColocarCuerda ||
         mostrarBotonSubir ||
-        mostrarBotonBajar) && (
+        mostrarBotonBajar ||
+        mostrarBotonSanar) && (
         <View style={styles.accionesTile} pointerEvents="box-none">
+          {mostrarBotonSanar && (
+            <TouchableOpacity style={styles.boton} onPress={sanarEnFuente}>
+              <Text style={styles.botonTexto}>Sanar</Text>
+            </TouchableOpacity>
+          )}
           {mostrarBotonCofre && (
             <TouchableOpacity style={styles.boton} onPress={abrirCofre}>
               <Text style={styles.botonTexto}>Abrir cofre</Text>
